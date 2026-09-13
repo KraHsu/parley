@@ -2,7 +2,7 @@
 
 ## 当前实现与目标架构
 
-当前 M0 只有 Vue 界面、内存语言设置，以及 Rust `get_runtime_info` 命令。以下 Codex、SQLite 和流式事件均为后续设计，尚未实现。
+当前已实现 Vue 工作台、Rust Codex stdio 客户端、官方登录、两个独立流式对话、SQLite 工作区存储和 Codex thread 恢复。词句学习数据仍为后续设计，当前表结构见 [持久化说明](PERSISTENCE.md)。具体实现与限制见 [Codex 接入说明](CODEX_INTEGRATION.md)。
 
 ```text
 Vue / Pinia
@@ -23,13 +23,13 @@ Rust application layer
 
 使用官方 App Server 扩展点，不复制网页登录 Cookie，不直接逆向订阅推理端点。初期使用用户安装的 CLI；将来是否打包官方二进制，需要单独确认分发、许可和升级策略。
 
-计划流程：
+接入流程：
 
 1. Rust 解析可执行文件路径并使用参数数组启动进程，不拼接 shell 命令。
 2. `initialize` 指明 `parley` 客户端身份，收到结果后发送 `initialized`。
 3. 查询账号；必要时执行官方 `account/login/start` 流程。
 4. 分页读取 `model/list`，提供主模型与辅导模型选择。
-5. 创建/恢复两个独立 thread；从 `turn/start` 到 `turn/completed` 按 ID 路由。
+5. 创建或恢复两个独立持久 thread；从 `turn/start` 到 `turn/completed` 按 ID 路由。
 6. 在 Rust 中将协议事件转换为应用事件；Vue 不依赖完整上游协议。
 7. 退出时取消活动工作并回收子进程；崩溃后提示恢复，不自动重放用户输入。
 
@@ -67,7 +67,7 @@ Rust application layer
 
 ## Tauri 权限与通信
 
-M0 仅注册 `get_runtime_info`，通过 AppManifest 生成命令权限，并只授予 `main` 窗口。生产 CSP 仅加载本地资源；开发 CSP 额外允许 Vite 样式注入和本地 HMR WebSocket。
+当前注册运行信息及明确的 Codex 连接、登录、发送、停止和重置命令，通过 AppManifest 生成权限，并只授予 `main` 窗口。流式事件使用 Tauri IPC Channel；不暴露任意 JSON-RPC 转发。生产 CSP 仅加载本地资源；开发 CSP 额外允许 Vite 样式注入和本地 HMR WebSocket。
 
 后续新增命令使用明确 DTO，例如 `start_conversation`、`ask_tutor`、`save_vocabulary`；不暴露“执行任意命令”“读取任意文件”之类通用接口。数据库操作和 Codex 凭据不直接交给 WebView。外部链接通过受控打开方式处理，Markdown 不允许原始 HTML 或任意协议链接。
 
@@ -83,4 +83,4 @@ M0 仅注册 `get_runtime_info`，通过 AppManifest 生成命令权限，并只
 - [Tauri Capabilities](https://v2.tauri.app/security/capabilities/)：窗口权限和应用命令白名单。
 - [Vue Quick Start](https://vuejs.org/guide/quick-start)：Vue/TypeScript/Vite 开发基础。
 
-官方支持 App Server 产品集成和 ChatGPT 登录是已确认事实；“Parley 的全部具体使用方式符合所有适用条款”不是这些技术文档单独能证明的结论。纯聊天权限配置、两会话并发、登录隔离和跨平台行为是 M1 的技术验证项。
+官方支持 App Server 产品集成和 ChatGPT 登录是已确认事实；“Parley 的全部具体使用方式符合所有适用条款”不是这些技术文档单独能证明的结论。当前已在 Linux 验证配置覆盖与两会话并发。凭据沿用本机 Codex 官方存储；全新账号浏览器授权及其他平台仍需人工实测。

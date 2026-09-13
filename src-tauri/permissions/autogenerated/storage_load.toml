@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-storage-load"
+description = "Enables the storage_load command without any pre-configured scope."
+commands.allow = ["storage_load"]
+
+[[permission]]
+identifier = "deny-storage-load"
+description = "Denies the storage_load command without any pre-configured scope."
+commands.deny = ["storage_load"]

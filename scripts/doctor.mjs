@@ -24,11 +24,13 @@ if (process.platform === 'linux') {
   check('Linux desktop libraries', 'pkg-config', ['--modversion', 'gtk+-3.0', 'webkit2gtk-4.1'])
 }
 
-// No login or model call. Codex is not needed for the M0 scaffold.
+// Version probe only. Browser UI development does not need Codex.
 if (process.platform !== 'win32') {
-  check('Codex (needed from M1)', 'codex', ['--version'], false)
+  check('Codex (required for desktop chat)', 'codex', ['--version'], false)
 } else {
-  console.log('OPTIONAL Codex: run codex --version in your terminal before M1 integration.')
+  console.log(
+    'OPTIONAL Codex: run codex --version in your terminal before connecting desktop chat.',
+  )
   console.log('NOTE Windows: also install the C++ Build Tools and WebView2 runtime.')
 }
 

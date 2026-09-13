@@ -13,7 +13,7 @@ export const languages: LanguageOption[] = [
   { code: 'ar', label: 'العربية' },
 ]
 
-// M0 keeps preferences in memory. M3 will persist them through the Rust storage layer.
+// The workspace store hydrates and saves these preferences through Rust/SQLite.
 export const useSettingsStore = defineStore('settings', () => {
   const nativeLanguage = ref('zh-CN')
   const targetLanguage = ref('en')

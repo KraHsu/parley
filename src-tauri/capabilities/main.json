@@ -1,7 +1,27 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "The main window can read non-sensitive application runtime metadata.",
+  "description": "Local language workspace commands; Codex credentials remain managed by Codex.",
   "windows": ["main"],
-  "permissions": ["allow-get-runtime-info"]
+  "permissions": [
+    "allow-get-runtime-info",
+    "allow-codex-connect",
+    "allow-codex-disconnect",
+    "allow-codex-status",
+    "allow-codex-login",
+    "allow-codex-cancel-login",
+    "allow-codex-open-login",
+    "allow-codex-send",
+    "allow-codex-stop",
+    "allow-codex-reset",
+    "allow-storage-load",
+    "allow-storage-save",
+    "allow-storage-create",
+    "allow-storage-list",
+    "allow-storage-read",
+    "allow-storage-delete",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-destroy"
+  ]
 }
