@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { captureSelection, captureText, type SourceOrigin } from '../../shared/selection'
 import { useVocabularyStore } from './store'
 import { useCodexStore } from '../codex/store'
@@ -9,6 +9,7 @@ const props = defineProps<{
   origin: SourceOrigin
   language: string
   allowAnswer?: boolean
+  answerTarget?: { id: string; requestId: string }
 }>()
 const emit = defineEmits<{
   freeze: [value: boolean]
@@ -43,9 +44,11 @@ function select() {
   try {
     selected.value = body.value ? captureSelection(body.value, origin.value) : null
     error.value = ''
-    answerTarget.value = vocabulary.editor
-      ? { id: vocabulary.editor.id, requestId: vocabulary.editor.requestId }
-      : null
+    answerTarget.value =
+      props.answerTarget ??
+      (vocabulary.editor
+        ? { id: vocabulary.editor.id, requestId: vocabulary.editor.requestId }
+        : null)
   } catch (e) {
     selected.value = null
     error.value = String(e)
@@ -108,6 +111,18 @@ async function ask(mode: 'explain' | 'translate') {
     mode,
   )
 }
+const answerIsStale = computed(() =>
+  Boolean(
+    answerTarget.value &&
+    vocabulary.editor &&
+    (answerTarget.value.id !== vocabulary.editor.id ||
+      answerTarget.value.requestId !== vocabulary.editor.requestId),
+  ),
+)
+function retargetAnswer() {
+  if (vocabulary.editor)
+    answerTarget.value = { id: vocabulary.editor.id, requestId: vocabulary.editor.requestId }
+}
 function useAnswer(field: 'meaning' | 'note') {
   if (selected.value && answerTarget.value)
     vocabulary.useAnswer(selected.value.selectedText, field, answerTarget.value)
@@ -160,9 +175,15 @@ function useAnswer(field: 'meaning' | 'note') {
         <button v-if="allowAnswer && answerTarget" class="text-button" @click="useAnswer('note')">
           添加到注释
         </button>
+        <button v-if="allowAnswer && answerIsStale" class="text-button" @click="retargetAnswer">
+          确认改用于当前草稿
+        </button>
         <button class="text-button" @click="unfreeze">结束选择</button>
       </template>
     </div>
+    <small v-if="allowAnswer && answerIsStale" class="settings-help"
+      >这份答案对应较早的词句草稿。请先核对当前词句，再确认改用。</small
+    >
     <small v-if="frozen && displayed !== text" class="settings-help"
       >选区已固定，结束选择后显示最新内容。</small
     >

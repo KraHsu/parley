@@ -4,11 +4,11 @@
 
 ## 下载和安装
 
-从 [GitHub Releases](https://github.com/KraHsu/parley/releases) 下载 `Parley_0.1.0_amd64.deb` 和 `SHA256SUMS`，放在同一目录，执行：
+从 [GitHub Releases](https://github.com/KraHsu/parley/releases) 下载 `Parley_0.3.0_amd64.deb` 和 `SHA256SUMS`，放在同一目录，执行：
 
 ```bash
 sha256sum -c SHA256SUMS
-sudo apt install ./Parley_0.1.0_amd64.deb
+sudo apt install ./Parley_0.3.0_amd64.deb
 ```
 
 APT 会安装所需的 GTK 3 和 WebKitGTK 4.1 运行库。此构建需要 glibc 2.39 或更新版本，不适用于 Ubuntu 22.04 / Debian 12。安装 Parley 本身不需要 Rust、Node.js 或 npm 开发环境。
@@ -42,7 +42,13 @@ parley-cli -- resume --last
 
 应用菜单中的 **Parley Language Tutor / Parley 语法助手** 可以单独打开语法窗口。更多操作见 [终端伴随模式](https://github.com/KraHsu/parley/blob/main/docs/TERMINAL_COMPANION.md)。
 
+## 词句学习
+
+安装后无需连接 Codex 即可添加、检索和复习词句。对话选词、注释、标签及 JSON/CSV 备份操作见[词句学习指南](https://github.com/KraHsu/parley/blob/main/docs/VOCABULARY.md)。
+
 ## 升级和卸载
+
+从 v0.1.0 升级前，关闭所有 Parley 窗口并备份工作区数据库。v0.3.0 会在事务中将 schema 1 顺序迁移到 3，保留已有会话；旧版不能读取或写入升级后的数据库。需要回退时使用升级前的备份，不能直接降级数据库。
 
 升级时使用 `sudo apt install ./新版本安装包.deb`。卸载程序：
 

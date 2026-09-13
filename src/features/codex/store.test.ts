@@ -81,6 +81,24 @@ beforeEach(() => {
 const emit = (method: string, params: unknown, index = 0) =>
   mock.callbacks[index]!.onmessage({ method, params })
 describe('Codex workspace', () => {
+  it('binds late vocabulary answers to the draft version captured when sending', async () => {
+    const store = useCodexStore()
+    await store.connect()
+    const target = { id: 'draft-a', requestId: 'version-a' }
+    const sent = store.send('tutor', 'Explain this expression', 'explain', target)
+    target.id = 'draft-b'
+    target.requestId = 'version-b'
+    expect(await sent).toBe(true)
+    emit('item/agentMessage/delta', { pane: 'tutor', itemId: 'answer-a', delta: 'An answer' })
+    expect(store.lanes.tutor.messages.at(-1)?.vocabularyTarget).toEqual({
+      id: 'draft-a',
+      requestId: 'version-a',
+    })
+    emit('turn/completed', { pane: 'tutor', turn: { status: 'completed' } })
+    await store.send('tutor', 'Another question', 'explain')
+    emit('item/agentMessage/delta', { pane: 'tutor', itemId: 'answer-b', delta: 'Next answer' })
+    expect(store.lanes.tutor.messages.at(-1)?.vocabularyTarget).toBeUndefined()
+  })
   it('saves the chosen executable and sends that exact path when connecting', async () => {
     const store = useCodexStore()
     await store.initializeWorkspace()

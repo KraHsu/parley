@@ -113,7 +113,39 @@ try {
     await evaluate(`document.querySelector('#word-fixture .inline-error').textContent`),
     /组合字符/,
   )
+  // Offsets span actual child nodes; selection must stay inside one message.
+  await evaluate(`(()=>{
+    const body=document.querySelector('#word-fixture .study-body');body.replaceChildren(document.createTextNode('hello '),Object.assign(document.createElement('span'),{textContent:'world'}));
+    body.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',shiftKey:true,bubbles:true}));
+    const range=document.createRange();range.setStart(body.firstChild,3);range.setEnd(body.lastChild.firstChild,3);getSelection().removeAllRanges();getSelection().addRange(range);body.dispatchEvent(new KeyboardEvent('keyup',{key:'ArrowRight',shiftKey:true,bubbles:true}));
+  })()`)
+  await evaluate(`document.querySelector('#word-fixture .study-actions button').click()`)
+  assert.equal(await evaluate('captured.selectedText'), 'lo wor')
+  assert.equal(await evaluate('captured.start'), 3)
+  await evaluate(`(()=>{
+    const body=document.querySelector('#word-fixture .study-body');const outside=document.createElement('p');outside.textContent='another message';body.parentElement.append(outside);
+    const range=document.createRange();range.setStart(body.firstChild,0);range.setEnd(outside.firstChild,4);getSelection().removeAllRanges();getSelection().addRange(range);body.dispatchEvent(new PointerEvent('pointerup',{bubbles:true}));
+  })()`)
+  assert.match(
+    await evaluate(`document.querySelector('#word-fixture .inline-error').textContent`),
+    /一条消息/,
+  )
+  await evaluate(`getSelection().removeAllRanges()`)
   await evaluate(`document.querySelector('#word-fixture').remove()`)
+  await evaluate(`(async()=>{
+    const {createApp,h}=await import('/node_modules/.vite/deps/vue.js');const {default:LanguagePicker}=await import('/src/features/settings/LanguagePicker.vue');
+    const host=document.createElement('div');host.id='language-fixture';document.body.append(host);window.languageUpdates=[];
+    createApp({render:()=>h(LanguagePicker,{modelValue:'en',label:'目标','onUpdate:modelValue':v=>languageUpdates.push(v)})}).mount(host)
+  })()`)
+  await evaluate(
+    `(()=>{const input=document.querySelector('#language-fixture input');input.value='pt-BR';input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',isComposing:true,bubbles:true}));})()`,
+  )
+  assert.deepEqual(await evaluate('languageUpdates'), [])
+  await evaluate(
+    `document.querySelector('#language-fixture input').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))`,
+  )
+  assert.deepEqual(await evaluate('languageUpdates'), ['pt-BR'])
+  await evaluate(`document.querySelector('#language-fixture').remove()`)
   await viewport(420, 820)
   await call('Page.navigate', { url: 'http://127.0.0.1:1420/?mode=tutor' })
   await waitFor(`document.querySelector('.tutor-app')`)

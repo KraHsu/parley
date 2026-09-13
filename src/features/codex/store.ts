@@ -5,11 +5,16 @@ import { isDesktop } from '../../shared/desktop'
 import { useSettingsStore } from '../settings/store'
 
 export type Pane = 'main' | 'tutor'
+export interface VocabularyAnswerTarget {
+  id: string
+  requestId: string
+}
 export interface Message {
   id: string
   role: 'user' | 'assistant' | 'note'
   text: string
   status?: 'pending' | 'streaming' | 'complete' | 'interrupted' | 'failed'
+  vocabularyTarget?: VocabularyAnswerTarget
 }
 interface Model {
   id: string
@@ -80,6 +85,7 @@ interface Lane {
   error: string
   signature: string
   request: number
+  vocabularyTarget?: VocabularyAnswerTarget
 }
 interface ServerEvent {
   method: string
@@ -483,7 +489,13 @@ export const useCodexStore = defineStore('codex', () => {
       if (!id) return
       let message = lane.messages.find((m) => m.id === id)
       if (!message) {
-        message = { id, role: 'assistant', text: '', status: 'streaming' }
+        message = {
+          id,
+          role: 'assistant',
+          text: '',
+          status: 'streaming',
+          vocabularyTarget: lane.vocabularyTarget,
+        }
         lane.messages.push(message)
         message = lane.messages[lane.messages.length - 1]!
       }
@@ -598,9 +610,15 @@ export const useCodexStore = defineStore('codex', () => {
       error.value = describe(e)
     }
   }
-  async function send(pane: Pane, text: string, mode = 'conversation'): Promise<boolean> {
+  async function send(
+    pane: Pane,
+    text: string,
+    mode = 'conversation',
+    vocabularyTarget?: VocabularyAnswerTarget,
+  ): Promise<boolean> {
     const lane = lanes[pane]
     const model = pane === 'main' ? mainModel.value : tutorModel.value
+    const answerSnapshot = vocabularyTarget ? { ...vocabularyTarget } : undefined
     const terminalSnapshot = pane === 'tutor' ? terminalContext.value || null : null
     if (!ready.value || lane.busy || !text.trim() || !model) return false
     if (!models.value.some((m) => m.model === model)) {
@@ -621,6 +639,7 @@ export const useCodexStore = defineStore('codex', () => {
       if (!(await flush())) return false
     }
     if (lane.busy) return false
+    lane.vocabularyTarget = answerSnapshot
     lane.signature = signature
     lane.error = ''
     lane.busy = true

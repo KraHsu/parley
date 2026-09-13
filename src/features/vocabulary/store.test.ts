@@ -97,6 +97,43 @@ describe('vocabulary workspace', () => {
     expect(store.editorOpen).toBe(true)
     expect(store.duplicate?.id).toBe('entry')
   })
+  it('keeps entered meaning, notes and tags as a draft when only attaching a source', async () => {
+    const store = useVocabularyStore()
+    await store.initialize()
+    await store.start(
+      {
+        sourceKind: 'terminal',
+        conversationId: null,
+        messageId: null,
+        threadId: 'thread',
+        turnId: 'turn',
+        itemId: 'item',
+        role: 'assistant',
+        selectedText: 'hello',
+        snapshot: 'hello',
+        start: 0,
+        end: 5,
+        truncated: false,
+        locatorVersion: 1,
+      },
+      'en',
+    )
+    store.editor!.fields.meaning = 'another meaning'
+    store.editor!.tagText = 'daily'
+    ipc.invoke.mockImplementation(async (command: string, args) => {
+      if (command === 'vocabulary_add_occurrence') {
+        expect(args.request.draftId).toBeNull()
+        return entry()
+      }
+      if (command === 'vocabulary_list') return empty
+      if (command === 'vocabulary_load_drafts') return []
+    })
+    await store.attach(entry())
+    expect(store.notice).toContain('仍保留在草稿')
+    expect(ipc.invoke.mock.calls.some(([command]) => command === 'vocabulary_discard_draft')).toBe(
+      false,
+    )
+  })
   it('ignores search results invalidated while debounce is pending', async () => {
     const store = useVocabularyStore()
     await store.initialize()

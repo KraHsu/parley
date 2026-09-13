@@ -7,6 +7,7 @@ const vocabulary = useVocabularyStore()
 const busy = ref(false)
 const error = ref('')
 const resetConfirm = ref('')
+const retries = new Map<string, string>()
 watch(
   () => vocabulary.selected,
   () => {
@@ -21,10 +22,12 @@ async function card(direction: string, existing?: ReviewCard, reset = false) {
   if (!entry || busy.value) return
   busy.value = true
   error.value = ''
+  const key = JSON.stringify([entry.id, direction, existing?.revision, reset])
+  if (!retries.has(key)) retries.set(key, crypto.randomUUID())
   try {
     await invoke('vocabulary_card_save', {
       request: {
-        requestId: crypto.randomUUID(),
+        requestId: retries.get(key)!,
         entryId: entry.id,
         direction,
         suspended: reset ? false : existing ? !existing.suspended : false,

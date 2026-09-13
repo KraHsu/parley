@@ -3,7 +3,7 @@ import { nextTick, ref, watch } from 'vue'
 import { wordInvoke as invoke } from '../../shared/word-operations'
 import { useVocabularyStore } from './store'
 import { useCodexStore } from '../codex/store'
-import type { EntryPage } from './types'
+import type { EntryPage, VocabularyEntry } from './types'
 const vocabulary = useVocabularyStore()
 const codex = useCodexStore()
 const dialog = ref<HTMLDialogElement>()
@@ -50,10 +50,21 @@ async function saveAnotherMeaning() {
 async function explain() {
   const draft = vocabulary.editor
   if (!draft || !(await vocabulary.flushDraft())) return
+  const answerTarget = { id: draft.id, requestId: draft.requestId }
+  let sentence = draft.occurrence?.snapshot ?? ''
+  if (!sentence && draft.entryId) {
+    try {
+      const entry = await invoke<VocabularyEntry>('vocabulary_get', { id: draft.entryId })
+      sentence = entry.occurrences[0]?.snapshot ?? ''
+    } catch (error) {
+      vocabulary.error = String(error)
+      return
+    }
+  }
   const snapshot = JSON.stringify({
     word: draft.fields.text,
     language: draft.fields.language,
-    sentence: draft.occurrence?.snapshot ?? '',
+    sentence,
   })
   await vocabulary.closeEditor()
   codex.tutorMode = 'explain'
@@ -63,6 +74,7 @@ async function explain() {
     'tutor',
     `请解释下面的学习词句。先给简短释义，再解释用法。\n${snapshot}`,
     'explain',
+    answerTarget,
   )
 }
 </script>

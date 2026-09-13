@@ -36,7 +36,8 @@ watch(
         v-if="message.role !== 'note'"
         :text="message.text"
         :language="conversation?.targetLanguage ?? settings.targetLanguage"
-        :allow-answer="pane === 'tutor'"
+        :allow-answer="pane === 'tutor' && message.role === 'assistant'"
+        :answer-target="message.vocabularyTarget"
         :origin="{
           sourceKind: pane,
           conversationId: codex.lanes[pane].id,
