@@ -2,9 +2,11 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "get_runtime_info",
+            "get_launch_options",
             "codex_connect",
             "codex_disconnect",
             "codex_status",
+            "codex_terminal_context",
             "codex_login",
             "codex_cancel_login",
             "codex_open_login",

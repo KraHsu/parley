@@ -35,6 +35,25 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "category": "Education",
+    "publisher": "Parley contributors",
+    "shortDescription": "Language practice with Codex and a grammar companion",
+    "licenseFile": "../LICENSE",
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/share/applications/parley-terminal.desktop": "packaging/parley-terminal.desktop",
+          "/usr/share/applications/parley-tutor.desktop": "packaging/parley-tutor.desktop",
+          "/usr/share/doc/parley/README.md": "../README.md",
+          "/usr/share/doc/parley/TERMINAL_COMPANION.md": "../docs/TERMINAL_COMPANION.md",
+          "/usr/share/doc/parley/INSTALL.md": "../docs/INSTALL.md",
+          "/usr/share/doc/parley/LICENSE": "../LICENSE"
+        },
+        "depends": ["libc6 (>= 2.39)"]
+      }
+    },
+    "homepage": "https://github.com/KraHsu/parley",
+    "longDescription": "Practice languages with your own Codex CLI and a grammar companion. Includes the desktop workspace and native terminal launcher."
   }
 }

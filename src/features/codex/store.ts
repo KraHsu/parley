@@ -53,6 +53,7 @@ export interface Conversation {
   messages: Message[]
 }
 interface Preferences {
+  codexPath: string
   nativeLanguage: string
   targetLanguage: string
   mainModel: string
@@ -115,7 +116,20 @@ export const useCodexStore = defineStore('codex', () => {
   const error = ref('')
   const notice = ref('')
   const account = ref<Account | null>(null)
+  const accountChecked = ref(false)
+  const checkingAccount = ref(false)
+  const loadingModels = ref(false)
+  const limitsError = ref('')
+  const needsLogin = computed(
+    () =>
+      connected.value &&
+      accountChecked.value &&
+      !checkingAccount.value &&
+      account.value?.type !== 'chatgpt',
+  )
   const models = ref<Model[]>([])
+  const codexPath = ref('')
+  const terminalContext = ref('')
   const mainModel = ref('')
   const tutorModel = ref('')
   const limits = ref<Status['limits']>(null)
@@ -136,6 +150,7 @@ export const useCodexStore = defineStore('codex', () => {
     () =>
       connected.value &&
       account.value?.type === 'chatgpt' &&
+      models.value.length > 0 &&
       initialized.value &&
       !storageError.value &&
       !closing.value,
@@ -148,6 +163,7 @@ export const useCodexStore = defineStore('codex', () => {
   function snapshot() {
     return {
       preferences: {
+        codexPath: codexPath.value,
         nativeLanguage: settings.nativeLanguage,
         targetLanguage: settings.targetLanguage,
         mainModel: mainModel.value,
@@ -200,6 +216,7 @@ export const useCodexStore = defineStore('codex', () => {
   }
   watch(
     () => [
+      codexPath.value,
       settings.nativeLanguage,
       settings.targetLanguage,
       mainModel.value,
@@ -272,6 +289,7 @@ export const useCodexStore = defineStore('codex', () => {
         if (isDesktop()) {
           const workspace = await invoke<Workspace>('storage_load')
           applying = true
+          codexPath.value = workspace.preferences.codexPath ?? ''
           settings.nativeLanguage = workspace.preferences.nativeLanguage
           settings.targetLanguage = workspace.preferences.targetLanguage
           mainModel.value = workspace.preferences.mainModel
@@ -344,28 +362,80 @@ export const useCodexStore = defineStore('codex', () => {
     }
   }
   const label = computed(() =>
-    connecting.value ? '连接中…' : ready.value ? '已连接' : connected.value ? '待登录' : '未连接',
+    connecting.value
+      ? '连接中…'
+      : checkingAccount.value
+        ? '读取本机账号…'
+        : !connected.value
+          ? '未连接'
+          : account.value?.type === 'chatgpt'
+            ? loadingModels.value
+              ? '已登录 · 读取模型…'
+              : '已登录'
+            : accountChecked.value
+              ? '待登录'
+              : '账号状态未知',
   )
   let epoch = 0
   let loginAttempt = 0
   let statusRequest = 0
 
   async function refresh() {
+    if (!connected.value) return
     const current = epoch
     const request = ++statusRequest
+    const valid = () => current === epoch && request === statusRequest && connected.value
+    checkingAccount.value = true
+    accountChecked.value = false
+    loadingModels.value = false
     try {
-      const status = await invoke<Status>('codex_status')
-      if (current !== epoch || request !== statusRequest || !connected.value) return
+      const status = await invoke<Pick<Status, 'account'>>('codex_status', { section: 'account' })
+      if (!valid()) return
       account.value = status.account
-      models.value = status.models
-      limits.value = status.limits
-      const fallback =
-        status.models.find((m) => m.isDefault)?.model ?? status.models[0]?.model ?? ''
-      if (!mainModel.value) mainModel.value = fallback
-      if (!tutorModel.value)
-        tutorModel.value = status.models.find((m) => m.model.includes('luna'))?.model ?? fallback
+      accountChecked.value = true
+      checkingAccount.value = false
+      error.value = ''
+      if (status.account?.type !== 'chatgpt') {
+        models.value = []
+        limits.value = null
+        return
+      }
+      // Existing CLI credentials are sufficient; never start another browser login.
+      if (loggingIn.value || login.value) loginAttempt++
+      loggingIn.value = false
+      login.value = null
+      loadingModels.value = true
+      limitsError.value = ''
+      void invoke<Pick<Status, 'limits'>>('codex_status', { section: 'limits' })
+        .then((result) => {
+          if (valid()) limits.value = result.limits
+        })
+        .catch(() => {
+          if (valid()) {
+            limits.value = null
+            limitsError.value = '额度暂时无法读取，不影响登录。可点击刷新重试。'
+          }
+        })
+      try {
+        const result = await invoke<Pick<Status, 'models'>>('codex_status', { section: 'models' })
+        if (!valid()) return
+        models.value = result.models
+        const fallback =
+          result.models.find((m) => m.isDefault)?.model ?? result.models[0]?.model ?? ''
+        if (!mainModel.value) mainModel.value = fallback
+        if (!tutorModel.value)
+          tutorModel.value = result.models.find((m) => m.model.includes('luna'))?.model ?? fallback
+        if (!result.models.length) error.value = '本机账号已登录，但没有返回可用模型。请刷新重试。'
+      } catch (e) {
+        if (valid()) error.value = `本机账号已登录，模型列表读取失败：${describe(e)}`
+      }
     } catch (e) {
-      if (current === epoch) error.value = describe(e)
+      if (valid()) error.value = `无法读取本机登录状态：${describe(e)}`
+    } finally {
+      if (valid()) {
+        checkingAccount.value = false
+        loadingModels.value = false
+      }
     }
   }
   function receive(event: ServerEvent) {
@@ -377,6 +447,12 @@ export const useCodexStore = defineStore('codex', () => {
       connecting.value = false
       connected.value = false
       account.value = null
+      accountChecked.value = false
+      checkingAccount.value = false
+      loadingModels.value = false
+      models.value = []
+      limits.value = null
+      limitsError.value = ''
       login.value = null
       loggingIn.value = false
       error.value = p.message ?? 'Codex 已断开'
@@ -442,6 +518,12 @@ export const useCodexStore = defineStore('codex', () => {
     }
     await initializeWorkspace()
     if (!initialized.value || storageError.value) return
+    const path = codexPath.value.trim()
+    if (!path) {
+      error.value = '请在设置中填写你自己的 Codex 可执行文件完整路径。'
+      return
+    }
+    if (!(await flush()) || connecting.value) return
     const current = ++epoch
     connecting.value = true
     connected.value = false
@@ -452,9 +534,10 @@ export const useCodexStore = defineStore('codex', () => {
       if (current === epoch) receive(event)
     }
     try {
-      await invoke('codex_connect', { events })
+      await invoke('codex_connect', { events, codexPath: path })
       if (current !== epoch) return
       connected.value = true
+      connecting.value = false
       for (const lane of Object.values(lanes)) {
         lane.busy = false
         lane.request++
@@ -488,6 +571,12 @@ export const useCodexStore = defineStore('codex', () => {
     loggingIn.value = true
     error.value = ''
     try {
+      await refresh()
+      if (current !== epoch || attempt !== loginAttempt) return
+      if (!needsLogin.value) {
+        loggingIn.value = false
+        return
+      }
       const result = await invoke<{ loginId: string; authUrl: string }>('codex_login')
       if (current !== epoch || attempt !== loginAttempt) return
       login.value = result
@@ -512,6 +601,7 @@ export const useCodexStore = defineStore('codex', () => {
   async function send(pane: Pane, text: string, mode = 'conversation'): Promise<boolean> {
     const lane = lanes[pane]
     const model = pane === 'main' ? mainModel.value : tutorModel.value
+    const terminalSnapshot = pane === 'tutor' ? terminalContext.value || null : null
     if (!ready.value || lane.busy || !text.trim() || !model) return false
     if (!models.value.some((m) => m.model === model)) {
       lane.error = '当前账号不再提供已保存的模型，请在设置中选择可用模型。'
@@ -548,6 +638,7 @@ export const useCodexStore = defineStore('codex', () => {
           model,
           targetLanguage: settings.targetLanguage,
           nativeLanguage: settings.nativeLanguage,
+          terminalContext: terminalSnapshot,
           mode,
         },
       })
@@ -609,7 +700,14 @@ export const useCodexStore = defineStore('codex', () => {
     error,
     notice,
     account,
+    accountChecked,
+    checkingAccount,
+    loadingModels,
+    needsLogin,
+    limitsError,
     models,
+    codexPath,
+    terminalContext,
     mainModel,
     tutorModel,
     limits,

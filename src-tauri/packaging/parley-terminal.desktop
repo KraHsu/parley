@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Parley Terminal
+Name[zh_CN]=Parley 终端伴随
+Comment=Codex terminal with a language tutor window
+Comment[zh_CN]=官方 Codex 终端与语言答疑窗口
+Exec=parley-cli
+Icon=parley
+Terminal=true
+Categories=Education;Languages;
+StartupNotify=false

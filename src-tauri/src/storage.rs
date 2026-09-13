@@ -44,6 +44,7 @@ pub struct Storage {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Preferences {
+    pub codex_path: String,
     pub native_language: String,
     pub target_language: String,
     pub main_model: String,
@@ -57,6 +58,7 @@ pub struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
+            codex_path: String::new(),
             native_language: "zh-CN".into(),
             target_language: "en".into(),
             main_model: String::new(),
@@ -512,6 +514,7 @@ mod tests {
                 tutor_id: Some("t".into()),
                 target_language: "ja".into(),
                 main_model: "saved-model".into(),
+                codex_path: "/custom tools/codex".into(),
                 ..Default::default()
             };
             s.save(
@@ -540,6 +543,7 @@ mod tests {
         let s = Storage::open(&path).unwrap();
         let w = s.load().unwrap();
         assert_eq!(w.preferences.main_model, "saved-model");
+        assert_eq!(w.preferences.codex_path, "/custom tools/codex");
         assert_eq!(w.tutor.unwrap().draft, "مرحبا café 日本語");
         let c = w.main.unwrap();
         assert_eq!(c.thread_id.as_deref(), Some("upstream-thread"));

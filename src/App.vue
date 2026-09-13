@@ -1,47 +1,24 @@
 <script setup lang="ts">
-import { ref, toRef, onMounted, onUnmounted } from 'vue'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { ref, toRef } from 'vue'
 import ConnectionSettings from './features/codex/ConnectionSettings.vue'
-import { useCodexStore } from './features/codex/store'
 import ConversationPanel from './features/conversation/ConversationPanel.vue'
 import TutorPanel from './features/tutor/TutorPanel.vue'
 import VocabularyPanel from './features/vocabulary/VocabularyPanel.vue'
 import AppIcon from './shared/AppIcon.vue'
 import { languages, useSettingsStore } from './features/settings/store'
 import { getRuntimeInfo, isDesktop } from './shared/desktop'
+import { useWorkspaceWindow } from './shared/use-workspace-window'
 
 const settings = useSettingsStore()
-const codex = useCodexStore()
+const preferencesDialog = ref<HTMLDialogElement>()
+const { codex, closeError, attemptClose } = useWorkspaceWindow(() =>
+  preferencesDialog.value?.close(),
+)
 const activeView = toRef(codex, 'activeView')
 const mobilePane = toRef(codex, 'mobilePane')
-const preferencesDialog = ref<HTMLDialogElement>()
 const runtimeStatus = ref(isDesktop() ? '正在使用桌面客户端' : '正在使用浏览器预览')
 const checkingRuntime = ref(false)
-let unlistenClose: (() => void) | undefined
 const confirmingDelete = ref('')
-const closeBlocked = ref(false)
-async function closeWithoutSaving() {
-  await codex.disconnect()
-  await getCurrentWindow().destroy()
-}
-onMounted(async () => {
-  await codex.initializeWorkspace()
-  if (isDesktop()) {
-    unlistenClose = await getCurrentWindow().onCloseRequested(async (event) => {
-      event.preventDefault()
-      if (codex.closing) return
-      codex.closing = true
-      if (!codex.initialized || (await codex.flush())) {
-        await codex.disconnect()
-        await getCurrentWindow().destroy()
-      } else {
-        codex.closing = false
-        closeBlocked.value = true
-      }
-    })
-  }
-})
-onUnmounted(() => unlistenClose?.())
 async function deleteHistory(id: string) {
   if (confirmingDelete.value !== id) {
     confirmingDelete.value = id
@@ -181,9 +158,15 @@ async function checkRuntime() {
           重试保存 / 读取
         </button>
       </div>
-      <div v-if="closeBlocked" class="storage-banner" role="alert">
-        草稿未能保存，请修复后重试，或只保留已经保存的内容。
-        <button class="text-button" @click="closeWithoutSaving">关闭并放弃未保存修改</button>
+      <div v-if="codex.closing" class="storage-banner" role="status">正在保存并关闭…</div>
+      <div v-if="closeError" class="storage-banner" role="alert">
+        {{ closeError }}
+        <button class="text-button" :disabled="codex.closing" @click="attemptClose()">
+          重试关闭
+        </button>
+        <button class="text-button" :disabled="codex.closing" @click="attemptClose(true)">
+          强制关闭并放弃未保存修改
+        </button>
       </div>
       <nav class="compact-tabs" aria-label="工作区视图">
         <button

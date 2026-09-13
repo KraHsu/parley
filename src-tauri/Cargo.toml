@@ -1,5 +1,6 @@
 [package]
 name = "parley"
+default-run = "parley"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -20,3 +21,5 @@ tokio = { version = "1", features = ["process", "io-util", "sync", "time", "macr
 open = "5"
 url = "2"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+
+dirs = "6"

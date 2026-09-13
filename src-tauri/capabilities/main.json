@@ -5,9 +5,11 @@
   "windows": ["main"],
   "permissions": [
     "allow-get-runtime-info",
+    "allow-get-launch-options",
     "allow-codex-connect",
     "allow-codex-disconnect",
     "allow-codex-status",
+    "allow-codex-terminal-context",
     "allow-codex-login",
     "allow-codex-cancel-login",
     "allow-codex-open-login",

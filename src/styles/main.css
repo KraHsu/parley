@@ -1001,7 +1001,8 @@ textarea::-webkit-scrollbar-thumb {
   margin-top: 12px;
   color: var(--secondary);
 }
-.settings-field select {
+.settings-field select,
+.settings-field input {
   min-width: 155px;
   border: 1px solid #e4dfeb;
   background: #faf9fc;
@@ -1009,6 +1010,14 @@ textarea::-webkit-scrollbar-thumb {
   padding: 8px 12px;
   appearance: auto;
   font-size: 13px;
+}
+.codex-path-field {
+  flex-direction: column;
+  align-items: stretch;
+}
+.codex-path-field input {
+  width: 100%;
+  min-width: 0;
 }
 .settings-help {
   font-size: 12px;
@@ -1410,6 +1419,7 @@ textarea::-webkit-scrollbar-thumb {
   margin: 16px 0;
 }
 .inline-error {
+  white-space: pre-wrap;
   color: #a43e42;
   font-size: 12px;
   line-height: 1.6;
@@ -1567,4 +1577,100 @@ textarea::-webkit-scrollbar-thumb {
   .navigation .history-open span {
     display: none;
   }
+}
+
+/* Companion window used alongside the unmodified Codex terminal interface. */
+.tutor-app {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #fafafd;
+}
+.tutor-app-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--line);
+  background: white;
+}
+.tutor-app-header strong {
+  font-size: 23px;
+}
+.tutor-app-header strong span {
+  color: var(--accent);
+}
+.tutor-app-header p {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.tutor-app-header button {
+  flex-shrink: 0;
+}
+.tutor-app-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.tutor-app .storage-banner {
+  flex: none;
+  max-height: 140px;
+  overflow: auto;
+}
+.tutor-app .preferences-dialog {
+  max-height: calc(100dvh - 24px);
+  width: min(470px, calc(100vw - 24px));
+}
+.terminal-context {
+  flex: none;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  background: white;
+  max-height: 270px;
+  overflow: auto;
+}
+.terminal-context label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+.terminal-context select {
+  min-width: 0;
+  flex: 1;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.terminal-context summary {
+  margin: 10px 0;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--secondary);
+}
+.terminal-context blockquote {
+  white-space: pre-wrap;
+  max-height: 120px;
+  overflow: auto;
+  font-size: 13px;
+  line-height: 1.7;
+  margin: 8px 0;
+  padding: 8px 12px;
+  border-left: 2px solid #a895d8;
+  user-select: text;
+}
+.terminal-context-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.terminal-context-actions span {
+  font-size: 10px;
+  color: var(--muted);
 }

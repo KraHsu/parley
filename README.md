@@ -6,9 +6,32 @@ Parley 是一个开源、以本地数据为主的语言学习桌面客户端，�
 
 通过官方 **Codex App Server** 接入：每位用户登录自己的 ChatGPT 账号，并使用自己的 Codex 额度。项目不提供共享账号或集中转发服务。Parley 是独立项目。
 
+## 下载安装
+
+从 [GitHub Releases](https://github.com/KraHsu/parley/releases) 下载 Linux 安装包。当前提供 Ubuntu 24.04 x86_64 预览版，包含桌面程序和 `parley-cli`；安装后无需编译源码。步骤见 [安装说明](docs/INSTALL.md)。
+
+## 终端 Codex + 语法助手
+
+```bash
+parley-cli
+```
+
+源码开发可先运行 `npm run cli:build`，再运行 `npm run cli`。
+
+启动器读取设置中保存的 Codex 路径，在当前终端直接运行官方 TUI，同时打开语法助手窗口。首次使用也可以指定路径：
+
+```bash
+parley-cli --codex "$(command -v codex)"
+parley-cli -- resume --last
+```
+
+新对话自动关联到 GUI，无需复制文本。点击“解释当前回复”或“翻译”，或在 GUI 中选中同步的片段提问。恢复历史会话或候选不唯一时，从下拉框选择会话。同步读取 Codex 已保存的对话，通常在回复完成后更新。
+
+终端保持 Codex 原有登录、快捷键、工具和历史；GUI 保存辅导记录。操作和边界见 [终端伴随模式](docs/TERMINAL_COMPANION.md)。
+
 ## 当前状态
 
-当前已实现 **Codex 接入与双面板对话的首版**；词句学习功能仍在开发。
+当前支持 **官方 Codex TUI + 独立语法助手 GUI**，也保留双面板桌面工作台；词句学习功能仍在开发。
 
 - 固定视口的桌面工作台：左侧导航、中间对话/词句视图、右侧语言助手。页面本身不滚动，内容区域各自滚动。
 - 可编辑的双区草稿、目标语言话题提示、三种辅导模式和词句搜索空状态。
@@ -20,7 +43,7 @@ Parley 是一个开源、以本地数据为主的语言学习桌面客户端，�
 - 历史会话切换与删除、中断回复恢复、写入失败提示。
 - 尚未实现：划词、词句收藏与复习。
 
-应用启动时不自动连接或发送消息。点击设置中的“连接本机 Codex”开始使用；完整操作、版本要求与限制见 [Codex 接入说明](docs/CODEX_INTEGRATION.md)，数据位置与恢复行为见 [持久化说明](docs/PERSISTENCE.md)。浏览器预览只提供界面，真实接入需要桌面端。
+普通桌面工作台启动时不自动连接；终端伴随窗口会连接所选的本机 Codex。连接本身不发送模型请求。点击设置中的“连接本机 Codex”开始使用；完整操作、版本要求与限制见 [Codex 接入说明](docs/CODEX_INTEGRATION.md)，数据位置与恢复行为见 [持久化说明](docs/PERSISTENCE.md)。浏览器预览只提供界面，真实接入需要桌面端。
 
 ![Parley 桌面工作台](docs/screenshots/workspace.png)
 

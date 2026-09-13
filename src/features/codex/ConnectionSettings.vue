@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useCodexStore } from './store'
+defineProps<{ tutorOnly?: boolean }>()
 const codex = useCodexStore()
 const windows = computed(() => {
   const limit = codex.limits?.rateLimits
@@ -20,7 +21,23 @@ function duration(minutes: number | null) {
       Codex 连接 <span class="subtle-label">{{ codex.label }}</span>
     </h3>
     <p class="settings-help">
-      使用本机 Codex CLI 和你自己的 ChatGPT 账号。两处对话消耗同一账号的 Codex 额度。
+      连接时自动读取本机 Codex 已有的登录状态。两处对话使用你的 ChatGPT 账号及其 Codex 额度。
+    </p>
+    <label class="settings-field codex-path-field">
+      Codex 可执行文件路径
+      <input
+        v-model="codex.codexPath"
+        type="text"
+        placeholder="粘贴你安装的 Codex 的绝对路径"
+        :disabled="codex.connected || codex.connecting || !codex.initialized"
+        spellcheck="false"
+        autocomplete="off"
+        aria-describedby="codex-path-help"
+      />
+    </label>
+    <p id="codex-path-help" class="settings-help">
+      macOS / Linux：在终端运行 <code>command -v codex</code>，复制完整路径。 Windows：填写
+      <code>codex.exe</code> 的完整路径。路径会自动保存；更换前请先断开连接。
     </p>
     <p v-if="codex.account?.type === 'chatgpt'" class="account-detail">
       {{ codex.account.email ?? 'ChatGPT 账号' }} · {{ codex.account.planType }}
@@ -39,26 +56,39 @@ function duration(minutes: number | null) {
       </button>
       <template v-else>
         <button
-          v-if="!codex.ready"
+          v-if="codex.needsLogin"
           class="primary-button"
           :disabled="codex.loggingIn"
           @click="codex.signIn"
         >
           {{ codex.loggingIn ? '等待浏览器登录…' : '登录 ChatGPT' }}
         </button>
-        <button class="secondary-button" @click="codex.refresh">刷新状态</button>
+        <button
+          class="secondary-button"
+          :disabled="codex.checkingAccount || codex.loadingModels"
+          @click="codex.refresh"
+        >
+          {{
+            codex.checkingAccount
+              ? '读取本机账号…'
+              : codex.loadingModels
+                ? '读取模型…'
+                : '读取本机登录 / 刷新'
+          }}
+        </button>
         <button class="secondary-button" @click="codex.disconnect">断开连接</button>
       </template>
     </div>
     <div v-if="codex.login" class="login-pending">
-      <p>请在浏览器中完成 OpenAI 登录。登录状态由本机 Codex 管理。</p>
+      <p>请在浏览器中完成 OpenAI 登录。若已完成，可点击“读取本机登录 / 刷新”。</p>
       <button class="secondary-button" @click="codex.openLogin">重新打开登录页</button>
       <button class="secondary-button" @click="codex.cancelLogin">取消登录</button>
     </div>
     <p v-if="codex.error" class="inline-error" role="alert">{{ codex.error }}</p>
     <p v-if="codex.notice" class="settings-help" role="status">{{ codex.notice }}</p>
-    <template v-if="codex.ready">
-      <label class="settings-field"
+    <p v-if="codex.limitsError" class="settings-help" role="status">{{ codex.limitsError }}</p>
+    <template v-if="codex.account?.type === 'chatgpt' && codex.models.length">
+      <label v-if="!tutorOnly" class="settings-field"
         >对话模型<select v-model="codex.mainModel" :disabled="codex.lanes.main.busy">
           <option
             v-if="codex.mainModel && !codex.models.some((m) => m.model === codex.mainModel)"

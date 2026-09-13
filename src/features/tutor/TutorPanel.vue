@@ -99,7 +99,7 @@ function onKeydown(event: KeyboardEvent) {
           ><AppIcon name="arrow-right" :size="14" />
         </button>
       </div>
-      <div v-if="!lane.messages.length" class="context-tip">
+      <div v-if="!lane.messages.length && !codex.terminalContext" class="context-tip">
         <AppIcon name="quote" :size="16" />
         <p>读到不懂的词句？<br /><span>划词解释功能即将加入这里。</span></p>
       </div>

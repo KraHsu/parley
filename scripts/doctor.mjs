@@ -26,13 +26,17 @@ if (process.platform === 'linux') {
 
 // Version probe only. Browser UI development does not need Codex.
 if (process.platform !== 'win32') {
-  check('Codex (required for desktop chat)', 'codex', ['--version'], false)
+  check('Codex on PATH (reference only)', 'codex', ['--version'], false)
 } else {
   console.log(
     'OPTIONAL Codex: run codex --version in your terminal before connecting desktop chat.',
   )
   console.log('NOTE Windows: also install the C++ Build Tools and WebView2 runtime.')
 }
+
+console.log(
+  'NOTE Parley uses the Codex executable path saved in connection settings, not this PATH probe.',
+)
 
 if (process.platform === 'darwin') check('Xcode command line tools', 'xcode-select', ['-p'])
 console.log('Full platform prerequisites: https://v2.tauri.app/start/prerequisites/')

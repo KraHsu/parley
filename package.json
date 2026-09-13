@@ -21,7 +21,11 @@
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
     "desktop:check": "tauri build --debug --no-bundle",
-    "test": "vitest run"
+    "test": "vitest run",
+    "cli": "cargo run --locked --bin parley-cli --",
+    "cli:build": "npm run desktop:check -- -- --locked && cargo build --locked --bin parley-cli",
+    "tutor:dev": "tauri dev -- -- --tutor-only",
+    "package:linux": "tauri build --bundles deb -- --locked"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",

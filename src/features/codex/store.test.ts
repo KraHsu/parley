@@ -42,6 +42,7 @@ const conversation = (id: string, pane: 'main' | 'tutor'): Conversation => ({
 })
 const workspace = () => ({
   preferences: {
+    codexPath: '/user/bin/codex',
     nativeLanguage: 'zh-CN',
     targetLanguage: 'en',
     mainModel: '',
@@ -57,7 +58,10 @@ const workspace = () => ({
   history: [conversation('main', 'main'), conversation('tutor', 'tutor')],
   path: '/test/parley.sqlite3',
 })
-function defaultInvoke(method: string, args?: { id?: string; pane?: 'main' | 'tutor' }) {
+function defaultInvoke(
+  method: string,
+  args?: { id?: string; pane?: 'main' | 'tutor'; section?: string },
+) {
   if (method === 'codex_status') return status
   if (method === 'storage_load') return workspace()
   if (method === 'storage_create') return conversation(args!.id!, args!.pane!)
@@ -77,6 +81,123 @@ beforeEach(() => {
 const emit = (method: string, params: unknown, index = 0) =>
   mock.callbacks[index]!.onmessage({ method, params })
 describe('Codex workspace', () => {
+  it('saves the chosen executable and sends that exact path when connecting', async () => {
+    const store = useCodexStore()
+    await store.initializeWorkspace()
+    expect(store.codexPath).toBe('/user/bin/codex')
+    store.codexPath = '/user/My Tools/codex'
+    await store.connect()
+    expect(mock.invoke).toHaveBeenCalledWith(
+      'storage_save',
+      expect.objectContaining({
+        preferences: expect.objectContaining({ codexPath: '/user/My Tools/codex' }),
+      }),
+    )
+    expect(mock.invoke).toHaveBeenCalledWith(
+      'codex_connect',
+      expect.objectContaining({
+        codexPath: '/user/My Tools/codex',
+      }),
+    )
+  })
+  it('requires an explicit executable for workspaces saved before the path setting existed', async () => {
+    const saved = workspace()
+    Reflect.deleteProperty(saved.preferences, 'codexPath')
+    mock.invoke.mockImplementation(async (method: string, args) =>
+      method === 'storage_load' ? saved : defaultInvoke(method, args),
+    )
+    const store = useCodexStore()
+    await store.connect()
+    expect(store.codexPath).toBe('')
+    expect(store.error).toContain('完整路径')
+    expect(mock.invoke.mock.calls.some((call) => call[0] === 'codex_connect')).toBe(false)
+  })
+  it('shows the local account before models load and does not wait for quota to enable chat', async () => {
+    let resolveModels!: (value: unknown) => void
+    const slowModels = new Promise((resolve) => {
+      resolveModels = resolve
+    })
+    mock.invoke.mockImplementation(async (method: string, args) => {
+      if (method === 'codex_status' && args.section === 'models') return slowModels
+      if (method === 'codex_status' && args.section === 'limits') return new Promise(() => {})
+      return defaultInvoke(method, args)
+    })
+    const store = useCodexStore()
+    const connection = store.connect()
+    await vi.waitFor(() => expect(store.account?.type).toBe('chatgpt'))
+    expect(store.needsLogin).toBe(false)
+    expect(store.loadingModels).toBe(true)
+    expect(store.ready).toBe(false)
+    resolveModels({ models: status.models })
+    await connection
+    expect(store.ready).toBe(true)
+    expect(store.connecting).toBe(false)
+    expect(mock.invoke.mock.calls.some((call) => call[0] === 'codex_login')).toBe(false)
+  })
+  it('preserves local login when model and quota reads fail and does not start another login', async () => {
+    mock.invoke.mockImplementation(async (method: string, args) => {
+      if (method === 'codex_status' && args.section !== 'account')
+        throw new Error('network timeout')
+      return defaultInvoke(method, args)
+    })
+    const store = useCodexStore()
+    await store.connect()
+    expect(store.connected).toBe(true)
+    expect(store.needsLogin).toBe(false)
+    expect(store.error).toContain('模型列表读取失败')
+    expect(store.limitsError).toContain('额度暂时无法读取')
+    await store.signIn()
+    expect(store.loggingIn).toBe(false)
+    expect(mock.invoke.mock.calls.some((call) => call[0] === 'codex_login')).toBe(false)
+  })
+  it('re-reads a completed local login even if the browser completion event was missed', async () => {
+    let signedIn = false
+    mock.invoke.mockImplementation(async (method: string, args) => {
+      if (method === 'codex_status' && args.section === 'account')
+        return { account: signedIn ? status.account : null }
+      if (method === 'codex_login')
+        return { loginId: 'login', authUrl: 'https://auth.openai.com/test' }
+      return defaultInvoke(method, args)
+    })
+    const store = useCodexStore()
+    await store.connect()
+    expect(store.needsLogin).toBe(true)
+    expect(
+      mock.invoke.mock.calls.some(
+        (call) => call[0] === 'codex_status' && call[1].section === 'models',
+      ),
+    ).toBe(false)
+    await store.signIn()
+    expect(store.loggingIn).toBe(true)
+    signedIn = true
+    await store.refresh()
+    expect(store.ready).toBe(true)
+    expect(store.login).toBeNull()
+    expect(store.loggingIn).toBe(false)
+  })
+  it('automatically includes terminal context only with a tutor question', async () => {
+    const store = useCodexStore()
+    await store.connect()
+    store.terminalContext = 'assistant: How have you been?'
+    await store.send('tutor', '解释当前回复', 'explain')
+    expect(mock.invoke).toHaveBeenCalledWith(
+      'codex_send',
+      expect.objectContaining({
+        request: expect.objectContaining({
+          text: '解释当前回复',
+          terminalContext: store.terminalContext,
+        }),
+      }),
+    )
+    await store.send('main', 'Hello')
+    expect(mock.invoke).toHaveBeenCalledWith(
+      'codex_send',
+      expect.objectContaining({
+        request: expect.objectContaining({ pane: 'main', terminalContext: null }),
+      }),
+    )
+    expect(store.lanes.tutor.messages[0]?.text).toBe('解释当前回复')
+  })
   it('uses the account catalog and keeps streamed replies in their own panel', async () => {
     const store = useCodexStore()
     await store.connect()

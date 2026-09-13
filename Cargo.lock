@@ -2254,6 +2254,7 @@ dependencies = [
 name = "parley"
 version = "0.1.0"
 dependencies = [
+ "dirs",
  "open",
  "rusqlite",
  "serde",

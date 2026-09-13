@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Parley Language Tutor
+Name[zh_CN]=Parley 语法助手
+Comment=Language explanations and translation
+Exec=parley --tutor-only
+Icon=parley
+Terminal=false
+Categories=Education;Languages;
+StartupNotify=true
