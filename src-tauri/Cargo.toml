@@ -1,0 +1,17 @@
+[package]
+name = "parley"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Local-first language learning desktop workspace"
+
+[lib]
+name = "parley_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }

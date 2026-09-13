@@ -1,0 +1,9 @@
+node_modules
+dist
+target
+src-tauri/gen
+src-tauri/icons
+package-lock.json
+Cargo.lock
+.agents
+.codex

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "The main window can read non-sensitive application runtime metadata.",
+  "windows": ["main"],
+  "permissions": ["allow-get-runtime-info"]
+}
