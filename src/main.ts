@@ -5,6 +5,7 @@ import TutorApp from './TutorApp.vue'
 import { invoke } from '@tauri-apps/api/core'
 import { isDesktop } from './shared/desktop'
 import './styles/main.css'
+import './styles/vocabulary.css'
 
 async function start() {
   const options = isDesktop()

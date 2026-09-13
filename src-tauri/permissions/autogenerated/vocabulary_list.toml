@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vocabulary-list"
+description = "Enables the vocabulary_list command without any pre-configured scope."
+commands.allow = ["vocabulary_list"]
+
+[[permission]]
+identifier = "deny-vocabulary-list"
+description = "Denies the vocabulary_list command without any pre-configured scope."
+commands.deny = ["vocabulary_list"]

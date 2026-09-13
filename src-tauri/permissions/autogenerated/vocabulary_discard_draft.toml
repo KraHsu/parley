@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vocabulary-discard-draft"
+description = "Enables the vocabulary_discard_draft command without any pre-configured scope."
+commands.allow = ["vocabulary_discard_draft"]
+
+[[permission]]
+identifier = "deny-vocabulary-discard-draft"
+description = "Denies the vocabulary_discard_draft command without any pre-configured scope."
+commands.deny = ["vocabulary_discard_draft"]

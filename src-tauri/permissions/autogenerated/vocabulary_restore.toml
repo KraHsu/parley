@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vocabulary-restore"
+description = "Enables the vocabulary_restore command without any pre-configured scope."
+commands.allow = ["vocabulary_restore"]
+
+[[permission]]
+identifier = "deny-vocabulary-restore"
+description = "Denies the vocabulary_restore command without any pre-configured scope."
+commands.deny = ["vocabulary_restore"]

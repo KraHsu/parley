@@ -1,0 +1,461 @@
+.study-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  outline-offset: 4px;
+}
+.study-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 6px;
+  font-size: 11px;
+  opacity: 0.72;
+}
+.study-text:focus-within .study-actions,
+.study-text:hover .study-actions {
+  opacity: 1;
+}
+.word-notice {
+  padding: 10px 20px;
+  background: #f1edf9;
+  color: #65548f;
+  font-size: 12px;
+}
+.word-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 20px 22px;
+  border-bottom: 1px solid var(--border);
+}
+.word-filters label,
+.word-editor-scroll label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.word-search {
+  flex: 1 1 100%;
+}
+.word-filters input,
+.word-filters select,
+.word-editor-scroll input,
+.word-editor-scroll textarea,
+.word-editor-scroll select {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid #e5dfef;
+  border-radius: 9px;
+  background: #fcfbfe;
+  color: #363240;
+  padding: 10px 12px;
+  font: inherit;
+  outline-offset: 3px;
+}
+.word-filters select {
+  padding: 7px;
+}
+.word-filters .word-checkbox {
+  flex-direction: row;
+  align-items: center;
+  padding-top: 20px;
+}
+.word-checkbox input {
+  width: auto;
+}
+.word-list {
+  padding: 0 22px 22px;
+}
+.word-list-item {
+  width: 100%;
+  text-align: start;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 18px 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid #eeebf3;
+  color: inherit;
+  cursor: pointer;
+}
+.word-list-item:hover {
+  background: #f9f7fc;
+}
+.word-list-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+}
+.word-list-heading strong {
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+.word-list-item small {
+  color: #898194;
+  font-size: 10px;
+}
+.word-list-meaning {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  color: #756e82;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.word-detail {
+  padding: 20px 24px 32px;
+}
+.word-detail-header,
+.word-detail-actions,
+.word-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.word-detail h2 {
+  font-size: 25px;
+  line-height: 1.6;
+  margin: 24px 0 12px;
+  overflow-wrap: anywhere;
+}
+.word-detail h3 {
+  font-size: 12px;
+  margin: 25px 0 12px;
+  color: #8a7ba8;
+}
+.word-meaning,
+.word-note {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.9;
+  font-size: 14px;
+}
+.word-source {
+  background: #f8f6fb;
+  border: 1px solid #ece7f3;
+  padding: 15px;
+  border-radius: 12px;
+  margin: 14px 0;
+}
+.word-source blockquote {
+  margin: 8px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.9;
+  max-height: 240px;
+  overflow: auto;
+}
+.word-source small {
+  color: #91879f;
+  font-size: 10px;
+}
+.word-detail-actions {
+  margin-top: 26px;
+}
+.word-drafts {
+  margin: 14px 22px;
+  background: #faf7f0;
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 12px;
+}
+.word-drafts button {
+  display: block;
+  padding: 10px 0 0;
+}
+.word-pagination {
+  font-size: 11px;
+  margin-top: 20px;
+}
+.word-companion-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 10px 20px;
+  border-bottom: 1px solid #eeebf3;
+}
+.word-companion-tabs [aria-pressed='true'] {
+  background: #eee8f8;
+  color: #76609d;
+}
+.vocabulary-editor {
+  width: min(600px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  border: 1px solid #ebe5f2;
+  padding: 0;
+  border-radius: 20px;
+  color: #363240;
+  box-shadow: 0 24px 90px #30243a30;
+}
+.vocabulary-editor::backdrop {
+  background: #26203055;
+  backdrop-filter: blur(4px);
+}
+.vocabulary-editor form {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 28px);
+}
+.word-editor-scroll {
+  padding: 8px 24px 24px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.word-editor-scroll fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.word-editor-scroll textarea {
+  resize: vertical;
+  line-height: 1.7;
+}
+.word-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.word-related {
+  border-top: 1px solid #ebe5f2;
+  padding-top: 15px;
+  font-size: 12px;
+}
+.word-related-item {
+  display: block;
+  width: 100%;
+  text-align: start;
+  border: 0;
+  background: #f8f6fb;
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 6px;
+  color: #695881;
+  font: inherit;
+  cursor: pointer;
+}
+.word-related-item span {
+  display: block;
+  margin-top: 5px;
+  font-size: 10px;
+}
+.word-duplicate {
+  margin-top: 20px;
+  padding: 14px;
+  background: #fff6df;
+  border-radius: 10px;
+  font-size: 12px;
+}
+.word-duplicate button {
+  margin: 8px 12px 0 0;
+}
+.danger-text {
+  color: #ab5055 !important;
+}
+.tutor-app-body > .vocabulary {
+  height: 100%;
+  min-height: 0;
+}
+@media (max-width: 540px) {
+  .word-detail {
+    padding: 16px;
+  }
+  .word-filters {
+    padding: 16px;
+    gap: 10px;
+  }
+  .word-editor-scroll {
+    padding: 8px 16px 18px;
+  }
+  .word-list {
+    padding: 0 16px 16px;
+  }
+}
+.language-picker input {
+  border: 1px solid #e5dfef;
+  border-radius: 9px;
+  background: #fcfbfe;
+  padding: 10px 12px;
+  min-width: 0;
+  font: inherit;
+}
+.language-picker .inline-error {
+  grid-column: 1 / -1;
+}
+.review-panel {
+  padding: 20px 24px;
+}
+.review-panel h2 {
+  font-size: 22px;
+}
+.review-stats {
+  color: #8a7ba8;
+  font-size: 12px;
+  margin: 16px 0 24px;
+}
+.review-start {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 18px 0;
+}
+.review-start p,
+.review-finished p {
+  line-height: 1.9;
+}
+.review-panel input,
+.review-panel textarea,
+.word-tag-form input {
+  width: 100%;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e5dfef;
+  border-radius: 9px;
+  background: #fcfbfe;
+  font: inherit;
+}
+.review-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12px;
+}
+.review-card {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 20px 0;
+}
+.review-card h2 {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: 26px;
+  line-height: 1.6;
+}
+.review-answer {
+  padding: 18px;
+  background: #f8f6fb;
+  border-radius: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.review-answer blockquote {
+  margin: 16px 0 0;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.review-grades {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.review-grades button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 15px 5px;
+  border: 1px solid #e4dcec;
+  border-radius: 12px;
+  background: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+.review-grades button:last-child {
+  background: #f0ebf8;
+  color: #756098;
+}
+.review-grades small {
+  font-size: 10px;
+  color: #91879f;
+}
+.review-panel > .text-button {
+  margin: 14px 16px 10px 0;
+  font-size: 12px;
+}
+.word-tag-form {
+  display: flex;
+  gap: 10px;
+}
+.learning-card-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0;
+}
+.learning-card-row > div {
+  flex: 1;
+  min-width: 170px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.learning-card-row strong {
+  font-size: 12px;
+}
+.learning-card-row small {
+  color: #91879f;
+  font-size: 10px;
+}
+.word-exchange {
+  margin: 18px 22px 24px;
+  border-top: 1px solid #ece7f3;
+  padding-top: 18px;
+  font-size: 12px;
+}
+.word-exchange summary {
+  cursor: pointer;
+  color: #756098;
+}
+.word-exchange .settings-help {
+  margin: 12px 0;
+  overflow-wrap: anywhere;
+}
+.word-exchange .word-checkbox {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.word-exchange-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+.word-import-preview {
+  margin-top: 18px;
+  padding: 14px;
+  background: #f8f6fb;
+  border-radius: 12px;
+}
+.word-import-preview p {
+  margin: 12px 0;
+}
+.word-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: calc(100vw - 32px);
+  z-index: 20;
+  padding: 12px 18px;
+  border: 1px solid #e0d7ed;
+  border-radius: 14px;
+  background: #fcfaff;
+  color: #74618e;
+  box-shadow: 0 6px 30px #33214818;
+  font-size: 12px;
+}

@@ -86,7 +86,12 @@ function onKeydown(event: KeyboardEvent) {
       </button>
     </div>
     <div class="tutor-scroll scroll-region" tabindex="0" aria-label="语言辅导内容">
-      <MessageList v-if="lane.messages.length" :messages="lane.messages" :busy="lane.busy" />
+      <MessageList
+        pane="tutor"
+        v-if="lane.messages.length"
+        :messages="lane.messages"
+        :busy="lane.busy"
+      />
       <div v-if="!lane.messages.length" class="tutor-intro">
         <div class="tutor-illustration" aria-hidden="true"><span>A</span><span>文</span></div>
         <h3>卡住了？从这里继续。</h3>
@@ -101,7 +106,7 @@ function onKeydown(event: KeyboardEvent) {
       </div>
       <div v-if="!lane.messages.length && !codex.terminalContext" class="context-tip">
         <AppIcon name="quote" :size="16" />
-        <p>读到不懂的词句？<br /><span>划词解释功能即将加入这里。</span></p>
+        <p>读到不懂的词句？<br /><span>选中对话中的词句，即可解释、翻译或收藏。</span></p>
       </div>
     </div>
     <div class="tutor-composer-dock">

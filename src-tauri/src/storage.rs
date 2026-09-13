@@ -1,3 +1,6 @@
+pub mod exchange;
+pub mod review;
+pub mod vocabulary;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -125,13 +128,19 @@ fn migrate(db: &mut Connection) -> Result<()> {
     let version: i64 = db
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .map_err(error)?;
-    if version > 1 {
+    const MIGRATIONS: &[&str] = &[
+        include_str!("../migrations/001_workspace.sql"),
+        include_str!("../migrations/002_vocabulary.sql"),
+        include_str!("../migrations/003_vocabulary_review.sql"),
+    ];
+    if version < 0 || version as usize > MIGRATIONS.len() {
         return Err("数据库来自更新版本的 Parley。请升级应用；原始数据未改动。".into());
     }
-    if version == 0 {
+    if (version as usize) < MIGRATIONS.len() {
         let tx = db.transaction().map_err(error)?;
-        tx.execute_batch(include_str!("../migrations/001_workspace.sql"))
-            .map_err(error)?;
+        for migration in &MIGRATIONS[version as usize..] {
+            tx.execute_batch(migration).map_err(error)?;
+        }
         tx.commit().map_err(error)?;
     }
     Ok(())

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vocabulary-save"
+description = "Enables the vocabulary_save command without any pre-configured scope."
+commands.allow = ["vocabulary_save"]
+
+[[permission]]
+identifier = "deny-vocabulary-save"
+description = "Denies the vocabulary_save command without any pre-configured scope."
+commands.deny = ["vocabulary_save"]

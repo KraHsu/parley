@@ -18,7 +18,9 @@ export const useSettingsStore = defineStore('settings', () => {
   const nativeLanguage = ref('zh-CN')
   const targetLanguage = ref('en')
   const targetLanguageLabel = computed(
-    () => languages.find((language) => language.code === targetLanguage.value)?.label ?? '目标语言',
+    () =>
+      languages.find((language) => language.code === targetLanguage.value)?.label ??
+      targetLanguage.value,
   )
 
   return { nativeLanguage, targetLanguage, targetLanguageLabel }

@@ -682,7 +682,9 @@ async fn terminal_context(c: &Client, cwd: &str, thread_id: Option<&str>) -> Rep
             .await?;
         for turn in turns["data"].as_array().into_iter().flatten().rev() {
             for item in turn["items"].as_array().into_iter().flatten() {
-                if let Some(message) = context_message(item) {
+                if let Some(mut message) = context_message(item) {
+                    message["threadId"] = json!(id);
+                    message["turnId"] = turn["id"].clone();
                     messages.push(message);
                 }
             }
@@ -691,6 +693,7 @@ async fn terminal_context(c: &Client, cwd: &str, thread_id: Option<&str>) -> Rep
     Ok(json!({"threads":threads,"messages":messages}))
 }
 fn context_message(item: &Value) -> Option<Value> {
+    let id = item["id"].as_str().filter(|id| !id.is_empty())?;
     let (role, text) = match item["type"].as_str()? {
         "userMessage" => (
             "user",
@@ -708,7 +711,9 @@ fn context_message(item: &Value) -> Option<Value> {
     if text.trim().is_empty() {
         return None;
     }
-    Some(json!({"id":item["id"],"role":role,"text":text.chars().take(6000).collect::<String>()}))
+    Some(
+        json!({"id":id,"role":role,"text":text.chars().take(6000).collect::<String>(),"truncated":text.chars().count()>6000}),
+    )
 }
 
 #[derive(Deserialize, Serialize)]

@@ -1,13 +1,20 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
+import StudyText from '../vocabulary/StudyText.vue'
+import { useCodexStore } from './store'
+import { useSettingsStore } from '../settings/store'
 import type { Message } from './store'
-const props = defineProps<{ messages: Message[]; busy: boolean }>()
+const props = defineProps<{ messages: Message[]; busy: boolean; pane: 'main' | 'tutor' }>()
+const codex = useCodexStore()
+const settings = useSettingsStore()
+const conversation = computed(() => codex.history.find((c) => c.id === codex.lanes[props.pane].id))
 const root = ref<HTMLElement>()
 watch(
   () => [props.messages.length, props.messages.at(-1)?.text, props.busy],
   async () => {
     const scroller = root.value?.closest('.scroll-region')
     if (!scroller) return
+    if (window.getSelection()?.toString()) return
     const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120
     await nextTick()
     if (nearBottom) scroller.scrollTop = scroller.scrollHeight
@@ -25,7 +32,23 @@ watch(
       <span class="message-author">{{
         message.role === 'user' ? '你' : message.role === 'assistant' ? 'GPT' : '新会话'
       }}</span>
-      <p dir="auto">{{ message.text }}</p>
+      <StudyText
+        v-if="message.role !== 'note'"
+        :text="message.text"
+        :language="conversation?.targetLanguage ?? settings.targetLanguage"
+        :allow-answer="pane === 'tutor'"
+        :origin="{
+          sourceKind: pane,
+          conversationId: codex.lanes[pane].id,
+          messageId: message.id,
+          threadId: conversation?.threadId ?? null,
+          turnId: null,
+          itemId: message.id,
+          role: message.role,
+          truncated: false,
+        }"
+      />
+      <p v-else dir="auto">{{ message.text }}</p>
       <small
         v-if="message.status === 'interrupted' || message.status === 'failed'"
         class="message-state"

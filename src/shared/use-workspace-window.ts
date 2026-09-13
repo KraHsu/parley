@@ -4,9 +4,12 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useCodexStore } from '../features/codex/store'
 import { isDesktop } from './desktop'
 import { closeWorkspace } from './window-close'
+import { useVocabularyStore } from '../features/vocabulary/store'
+import { settleWordOperations } from './word-operations'
 
 export function useWorkspaceWindow(beforeClose: () => void, afterLoad?: () => Promise<void>) {
   const codex = useCodexStore()
+  const vocabulary = useVocabularyStore()
   const closeError = ref('')
   let unlisten: (() => void) | undefined
   let disposed = false
@@ -18,7 +21,12 @@ export function useWorkspaceWindow(beforeClose: () => void, afterLoad?: () => Pr
     try {
       await closeWorkspace(
         {
-          save: () => (codex.initialized ? codex.flush() : Promise.resolve(true)),
+          save: async () => {
+            const wordsSaved = await vocabulary.flush()
+            await settleWordOperations()
+            const chatSaved = codex.initialized ? await codex.flush() : true
+            return wordsSaved && chatSaved
+          },
           disconnect: () => invoke('codex_disconnect'),
           destroy: () => getCurrentWindow().destroy(),
         },
@@ -42,6 +50,7 @@ export function useWorkspaceWindow(beforeClose: () => void, afterLoad?: () => Pr
       }
     }
     await codex.initializeWorkspace()
+    if (codex.initialized) await vocabulary.initialize()
     if (!disposed && !codex.closing && codex.initialized) await afterLoad?.()
   })
   onUnmounted(() => {

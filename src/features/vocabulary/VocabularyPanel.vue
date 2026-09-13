@@ -1,39 +1,123 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import AppIcon from '../../shared/AppIcon.vue'
-const search = ref('')
+import { toRef, watch } from 'vue'
+import { useVocabularyStore } from './store'
+import { useCodexStore } from '../codex/store'
+import ReviewPanel from './ReviewPanel.vue'
+import VocabularyExchange from './VocabularyExchange.vue'
+import VocabularyList from './VocabularyList.vue'
+import VocabularyDetail from './VocabularyDetail.vue'
+defineProps<{ companion?: boolean }>()
+const vocabulary = useVocabularyStore()
+const codex = useCodexStore()
+const view = toRef(vocabulary, 'activeTab')
+watch(view, (tab) => {
+  if (tab === 'words' && vocabulary.selected) void vocabulary.open(vocabulary.selected.id)
+})
 </script>
-
 <template>
-  <section class="vocabulary content-panel" aria-labelledby="vocabulary-title">
+  <section
+    :inert="codex.closing"
+    class="vocabulary content-panel"
+    aria-labelledby="vocabulary-title"
+  >
     <header class="panel-toolbar">
-      <h1 id="vocabulary-title">词句收藏 <span class="count-badge">0</span></h1>
-      <span class="mode-label">你的表达积累</span>
+      <h1 id="vocabulary-title">
+        {{ view === 'review' ? '词句复习' : '词句收藏' }}
+        <span v-if="view === 'words'" class="count-badge">{{ vocabulary.total }}</span>
+      </h1>
+      <button
+        class="secondary-button"
+        :disabled="!vocabulary.initialized || vocabulary.busy"
+        @click="vocabulary.start()"
+      >
+        添加词句
+      </button>
     </header>
-    <div class="vocabulary-search">
-      <AppIcon name="search" :size="17" /><label class="sr-only" for="vocabulary-search"
-        >搜索收藏的词句</label
-      ><input
-        id="vocabulary-search"
-        v-model="search"
-        type="search"
-        placeholder="搜索词语、释义或注释…"
-      />
+    <nav v-if="!companion" class="word-companion-tabs" aria-label="词句学习视图">
+      <button class="text-button" :aria-pressed="view === 'words'" @click="view = 'words'">
+        词句本</button
+      ><button class="text-button" :aria-pressed="view === 'review'" @click="view = 'review'">
+        复习
+      </button>
+    </nav>
+    <div v-if="vocabulary.notice" class="word-notice" role="status">{{ vocabulary.notice }}</div>
+    <div v-if="vocabulary.error || vocabulary.draftError" class="storage-banner" role="alert">
+      {{ vocabulary.error || vocabulary.draftError
+      }}<button
+        class="text-button"
+        @click="vocabulary.initialized ? vocabulary.refresh() : vocabulary.initialize()"
+      >
+        重试读取
+      </button>
     </div>
-    <div class="vocabulary-scroll scroll-region" tabindex="0" aria-label="收藏词句列表">
-      <div class="vocabulary-welcome">
-        <span class="vocabulary-mark"><AppIcon name="book" :size="30" /></span>
-        <p class="overline">WORDS WORTH KEEPING</p>
-        <h2>{{ search ? '还没有匹配的词句' : '把喜欢的表达，留给未来的你。' }}</h2>
-        <p>
-          {{
-            search
-              ? `目前没有包含“${search}”的收藏。`
-              : '未来可以从对话中收藏词句，连同原句和自己的理解一起保存。'
-          }}
-        </p>
-        <span class="coming-soon">收藏与注释功能正在准备中</span>
-      </div>
+    <div class="vocabulary-scroll scroll-region" tabindex="0" aria-label="词句学习内容">
+      <ReviewPanel v-if="view === 'review'" />
+      <VocabularyDetail v-else-if="vocabulary.selected" />
+      <template v-else>
+        <details v-if="vocabulary.drafts.length" class="word-drafts">
+          <summary>{{ vocabulary.drafts.length }} 份未完成草稿</summary>
+          <button
+            v-for="draft in vocabulary.drafts"
+            :key="draft.id"
+            class="text-button"
+            @click="vocabulary.resume(draft)"
+          >
+            {{ draft.fields.text || '未命名词句' }} · 继续编辑
+          </button>
+        </details>
+        <div class="word-filters">
+          <label class="word-search"
+            >搜索<input
+              v-model="vocabulary.query.search"
+              type="search"
+              placeholder="词句、释义或注释…" /></label
+          ><label
+            >语言<select v-model="vocabulary.query.language">
+              <option value="">全部语言</option>
+              <option v-for="language in vocabulary.languages" :key="language">
+                {{ language }}
+              </option>
+            </select></label
+          ><label
+            >类型<select v-model="vocabulary.query.kind">
+              <option value="">全部类型</option>
+              <option value="word">词</option>
+              <option value="phrase">短语</option>
+              <option value="sentence">句子</option>
+            </select></label
+          ><label
+            >释义<select v-model="vocabulary.query.hasMeaning">
+              <option :value="null">全部</option>
+              <option :value="true">已有释义</option>
+              <option :value="false">待补充</option>
+            </select></label
+          ><label
+            >排序<select v-model="vocabulary.query.sort">
+              <option value="updated">最近更新</option>
+              <option value="created">最近收藏</option>
+            </select></label
+          ><label
+            >标签<select v-model="vocabulary.query.tag">
+              <option value="">全部标签</option>
+              <option v-for="tag in vocabulary.tags" :key="tag">{{ tag }}</option>
+            </select></label
+          >
+          <label
+            >复习<select v-model="vocabulary.query.reviewStatus">
+              <option value="">全部状态</option>
+              <option value="none">未加入</option>
+              <option value="due">已到期</option>
+              <option value="suspended">有暂停卡片</option>
+            </select></label
+          >
+          <label class="word-checkbox"
+            ><input v-model="vocabulary.query.trash" type="checkbox" />回收站</label
+          >
+        </div>
+        <p v-if="vocabulary.loading" class="settings-help" role="status">正在读取词句…</p>
+        <VocabularyList />
+        <VocabularyExchange />
+      </template>
     </div>
   </section>
 </template>

@@ -102,7 +102,12 @@ function onKeydown(event: KeyboardEvent) {
     </header>
 
     <div class="conversation-scroll scroll-region" tabindex="0" aria-label="对话消息">
-      <MessageList v-if="lane.messages.length" :messages="lane.messages" :busy="lane.busy" />
+      <MessageList
+        pane="main"
+        v-if="lane.messages.length"
+        :messages="lane.messages"
+        :busy="lane.busy"
+      />
       <div v-else class="conversation-welcome">
         <div class="welcome-mark" aria-hidden="true">
           <AppIcon name="chat" :size="30" /><span><AppIcon name="sparkles" :size="16" /></span>

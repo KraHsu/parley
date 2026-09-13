@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vocabulary-review-grade"
+description = "Enables the vocabulary_review_grade command without any pre-configured scope."
+commands.allow = ["vocabulary_review_grade"]
+
+[[permission]]
+identifier = "deny-vocabulary-review-grade"
+description = "Denies the vocabulary_review_grade command without any pre-configured scope."
+commands.deny = ["vocabulary_review_grade"]

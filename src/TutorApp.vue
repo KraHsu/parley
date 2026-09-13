@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import TutorPanel from './features/tutor/TutorPanel.vue'
 import TerminalContext from './features/terminal/TerminalContext.vue'
+import VocabularyPanel from './features/vocabulary/VocabularyPanel.vue'
+import VocabularyEditor from './features/vocabulary/VocabularyEditor.vue'
+import { useVocabularyStore } from './features/vocabulary/store'
+import LanguagePicker from './features/settings/LanguagePicker.vue'
 import ConnectionSettings from './features/codex/ConnectionSettings.vue'
-import { languages, useSettingsStore } from './features/settings/store'
+import { useSettingsStore } from './features/settings/store'
 import { useWorkspaceWindow } from './shared/use-workspace-window'
 import { isDesktop } from './shared/desktop'
 
@@ -13,6 +17,20 @@ const props = defineProps<{
   terminalStartedAt?: number
 }>()
 const settings = useSettingsStore()
+const view = ref('tutor')
+const vocabulary = useVocabularyStore()
+watch(
+  () => vocabulary.tutorFocusRequest,
+  () => (view.value = 'tutor'),
+)
+watch(
+  () => vocabulary.wordFocusRequest,
+  () => showWords('words'),
+)
+function showWords(tab: string) {
+  vocabulary.activeTab = tab
+  view.value = 'vocabulary'
+}
 const dialog = ref<HTMLDialogElement>()
 const { codex, closeError, attemptClose } = useWorkspaceWindow(
   () => dialog.value?.close(),
@@ -54,8 +72,43 @@ const { codex, closeError, attemptClose } = useWorkspaceWindow(
         强制关闭并放弃未保存修改
       </button>
     </div>
-    <TerminalContext v-if="terminalCwd" :started-at="terminalStartedAt ?? 0" />
-    <main class="tutor-app-body"><TutorPanel /></main>
+    <nav class="word-companion-tabs" aria-label="语法窗口视图">
+      <button class="secondary-button" :aria-pressed="view === 'tutor'" @click="view = 'tutor'">
+        答疑</button
+      ><button
+        class="secondary-button"
+        :aria-pressed="view === 'vocabulary' && vocabulary.activeTab === 'words'"
+        @click="showWords('words')"
+      >
+        词句
+      </button>
+      <button
+        class="secondary-button"
+        :aria-pressed="view === 'vocabulary' && vocabulary.activeTab === 'review'"
+        @click="showWords('review')"
+      >
+        复习
+      </button>
+    </nav>
+    <TerminalContext
+      v-if="terminalCwd"
+      v-show="view === 'tutor'"
+      :started-at="terminalStartedAt ?? 0"
+    />
+    <main class="tutor-app-body">
+      <TutorPanel v-show="view === 'tutor'" /><VocabularyPanel
+        companion
+        v-show="view === 'vocabulary'"
+      />
+    </main>
+    <div v-if="vocabulary.notice && view === 'tutor'" class="word-toast" role="status">
+      {{ vocabulary.notice
+      }}<button class="text-button" @click="showWords('words')">查看词句</button
+      ><button class="text-button" aria-label="收起收藏提示" @click="vocabulary.notice = ''">
+        ×
+      </button>
+    </div>
+    <VocabularyEditor />
     <dialog ref="dialog" class="preferences-dialog" aria-labelledby="tutor-settings-title">
       <div class="dialog-heading">
         <h2 id="tutor-settings-title">语法助手设置</h2>
@@ -64,26 +117,16 @@ const { codex, closeError, attemptClose } = useWorkspaceWindow(
       <div class="dialog-scroll scroll-region">
         <section class="settings-section">
           <h3>语言</h3>
-          <label class="settings-field"
-            >母语<select
-              v-model="settings.nativeLanguage"
-              :disabled="!codex.initialized || codex.closing"
-            >
-              <option v-for="language in languages" :key="language.code" :value="language.code">
-                {{ language.label }}
-              </option>
-            </select></label
-          >
-          <label class="settings-field"
-            >目标语言<select
-              v-model="settings.targetLanguage"
-              :disabled="!codex.initialized || codex.closing"
-            >
-              <option v-for="language in languages" :key="language.code" :value="language.code">
-                {{ language.label }}
-              </option>
-            </select></label
-          >
+          <LanguagePicker
+            v-model="settings.nativeLanguage"
+            label="母语"
+            :disabled="!codex.initialized || codex.closing"
+          />
+          <LanguagePicker
+            v-model="settings.targetLanguage"
+            label="目标语言"
+            :disabled="!codex.initialized || codex.closing"
+          />
           <p class="settings-help">
             这些设置用于语法助手。终端对话由 Codex 管理；关联后，提问会自动附带最近对话和选中片段。
           </p>

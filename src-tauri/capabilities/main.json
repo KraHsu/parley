@@ -24,6 +24,24 @@
     "allow-storage-delete",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
-    "core:window:allow-destroy"
+    "core:window:allow-destroy",
+    "allow-vocabulary-list",
+    "allow-vocabulary-get",
+    "allow-vocabulary-save",
+    "allow-vocabulary-add-occurrence",
+    "allow-vocabulary-trash",
+    "allow-vocabulary-restore",
+    "allow-vocabulary-purge",
+    "allow-vocabulary-save-draft",
+    "allow-vocabulary-load-drafts",
+    "allow-vocabulary-discard-draft",
+    "allow-vocabulary-card-save",
+    "allow-vocabulary-review-queue",
+    "allow-vocabulary-review-grade",
+    "allow-vocabulary-review-undo",
+    "allow-vocabulary-tags-save",
+    "allow-vocabulary-export",
+    "allow-vocabulary-preview-import",
+    "allow-vocabulary-import"
   ]
 }

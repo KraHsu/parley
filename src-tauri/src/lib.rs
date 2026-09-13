@@ -1,6 +1,9 @@
 mod codex;
+mod exchange;
 mod launcher;
+mod review;
 mod storage;
+mod vocabulary;
 pub use launcher::run_cli;
 use tauri::Manager;
 mod commands;
@@ -10,6 +13,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(options)
         .manage(codex::CodexState::default())
+        .manage(exchange::ImportState::default())
         .setup(|app| {
             if app.state::<launcher::LaunchOptions>().tutor_only {
                 let window = app
@@ -45,7 +49,25 @@ pub fn run() {
             storage::storage_create,
             storage::storage_list,
             storage::storage_read,
-            storage::storage_delete
+            storage::storage_delete,
+            vocabulary::vocabulary_list,
+            vocabulary::vocabulary_get,
+            vocabulary::vocabulary_save,
+            vocabulary::vocabulary_add_occurrence,
+            vocabulary::vocabulary_trash,
+            vocabulary::vocabulary_restore,
+            vocabulary::vocabulary_purge,
+            vocabulary::vocabulary_save_draft,
+            vocabulary::vocabulary_load_drafts,
+            vocabulary::vocabulary_discard_draft,
+            review::vocabulary_card_save,
+            review::vocabulary_review_queue,
+            review::vocabulary_review_grade,
+            review::vocabulary_review_undo,
+            review::vocabulary_tags_save,
+            exchange::vocabulary_export,
+            exchange::vocabulary_preview_import,
+            exchange::vocabulary_import,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Parley")

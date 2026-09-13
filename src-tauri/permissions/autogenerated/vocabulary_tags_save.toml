@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vocabulary-tags-save"
+description = "Enables the vocabulary_tags_save command without any pre-configured scope."
+commands.allow = ["vocabulary_tags_save"]
+
+[[permission]]
+identifier = "deny-vocabulary-tags-save"
+description = "Denies the vocabulary_tags_save command without any pre-configured scope."
+commands.deny = ["vocabulary_tags_save"]

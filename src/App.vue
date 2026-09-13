@@ -1,15 +1,26 @@
 <script setup lang="ts">
-import { ref, toRef } from 'vue'
+import { ref, toRef, watch } from 'vue'
 import ConnectionSettings from './features/codex/ConnectionSettings.vue'
 import ConversationPanel from './features/conversation/ConversationPanel.vue'
 import TutorPanel from './features/tutor/TutorPanel.vue'
 import VocabularyPanel from './features/vocabulary/VocabularyPanel.vue'
+import VocabularyEditor from './features/vocabulary/VocabularyEditor.vue'
+import { useVocabularyStore } from './features/vocabulary/store'
+import LanguagePicker from './features/settings/LanguagePicker.vue'
 import AppIcon from './shared/AppIcon.vue'
 import { languages, useSettingsStore } from './features/settings/store'
 import { getRuntimeInfo, isDesktop } from './shared/desktop'
 import { useWorkspaceWindow } from './shared/use-workspace-window'
 
 const settings = useSettingsStore()
+const vocabulary = useVocabularyStore()
+watch(
+  () => vocabulary.wordFocusRequest,
+  () => {
+    codex.activeView = 'vocabulary'
+    codex.mobilePane = 'main'
+  },
+)
 const preferencesDialog = ref<HTMLDialogElement>()
 const { codex, closeError, attemptClose } = useWorkspaceWindow(() =>
   preferencesDialog.value?.close(),
@@ -72,7 +83,8 @@ async function checkRuntime() {
             title="词句收藏"
             @click="showView('vocabulary')"
           >
-            <AppIcon name="book" /><span>词句收藏</span><span class="nav-count">0</span>
+            <AppIcon name="book" /><span>词句收藏</span
+            ><span class="nav-count">{{ vocabulary.activeCount }}</span>
           </button>
         </nav>
         <div class="history-section">
@@ -141,6 +153,12 @@ async function checkRuntime() {
               :disabled="!codex.initialized || codex.closing"
               aria-label="目标语言"
             >
+              <option
+                v-if="!languages.some((l) => l.code === settings.targetLanguage)"
+                :value="settings.targetLanguage"
+              >
+                {{ settings.targetLanguage }}
+              </option>
               <option v-for="language in languages" :key="language.code" :value="language.code">
                 {{ language.label }}
               </option></select
@@ -200,6 +218,14 @@ async function checkRuntime() {
       </main>
     </div>
 
+    <div v-if="vocabulary.notice && activeView !== 'vocabulary'" class="word-toast" role="status">
+      {{ vocabulary.notice
+      }}<button class="text-button" @click="vocabulary.wordFocusRequest++">查看词句</button
+      ><button class="text-button" aria-label="收起收藏提示" @click="vocabulary.notice = ''">
+        ×
+      </button>
+    </div>
+    <VocabularyEditor />
     <dialog
       ref="preferencesDialog"
       class="preferences-dialog"
@@ -222,25 +248,15 @@ async function checkRuntime() {
       <div class="dialog-scroll scroll-region">
         <section class="settings-section">
           <h3>我的语言</h3>
-          <label class="settings-field"
-            >母语<select
-              v-model="settings.nativeLanguage"
-              :disabled="!codex.initialized || codex.closing"
-            >
-              <option v-for="language in languages" :key="language.code" :value="language.code">
-                {{ language.label }}
-              </option>
-            </select></label
-          ><label class="settings-field"
-            >目标语言<select
-              v-model="settings.targetLanguage"
-              :disabled="!codex.initialized || codex.closing"
-            >
-              <option v-for="language in languages" :key="language.code" :value="language.code">
-                {{ language.label }}
-              </option>
-            </select></label
-          >
+          <LanguagePicker
+            v-model="settings.nativeLanguage"
+            label="母语"
+            :disabled="!codex.initialized || codex.closing"
+          /><LanguagePicker
+            v-model="settings.targetLanguage"
+            label="目标语言"
+            :disabled="!codex.initialized || codex.closing"
+          />
           <p class="settings-help">语言设置、模型选择和草稿会自动保存在本机。</p>
         </section>
         <ConnectionSettings />

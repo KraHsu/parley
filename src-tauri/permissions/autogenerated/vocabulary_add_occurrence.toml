@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vocabulary-add-occurrence"
+description = "Enables the vocabulary_add_occurrence command without any pre-configured scope."
+commands.allow = ["vocabulary_add_occurrence"]
+
+[[permission]]
+identifier = "deny-vocabulary-add-occurrence"
+description = "Denies the vocabulary_add_occurrence command without any pre-configured scope."
+commands.deny = ["vocabulary_add_occurrence"]

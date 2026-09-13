@@ -23,3 +23,10 @@ url = "2"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 dirs = "6"
+uuid = { version = "1.26.1", features = ["v4", "serde"] }
+unicode-normalization = "0.1.25"
+unicode-segmentation = "1.13.3"
+sha2 = "0.10"
+language-tags = "0.3"
+rfd = { version = "0.17.2", default-features = false, features = ["gtk3"] }
+tempfile = "3.27.0"

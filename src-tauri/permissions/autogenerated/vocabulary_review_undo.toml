@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vocabulary-review-undo"
+description = "Enables the vocabulary_review_undo command without any pre-configured scope."
+commands.allow = ["vocabulary_review_undo"]
+
+[[permission]]
+identifier = "deny-vocabulary-review-undo"
+description = "Denies the vocabulary_review_undo command without any pre-configured scope."
+commands.deny = ["vocabulary_review_undo"]

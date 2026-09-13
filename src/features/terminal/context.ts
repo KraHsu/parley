@@ -6,6 +6,9 @@ export interface TerminalThread {
 export interface TerminalMessage {
   id: string
   role: 'user' | 'assistant'
+  threadId?: string
+  turnId?: string | null
+  truncated?: boolean
   text: string
 }
 export interface TerminalSnapshot {

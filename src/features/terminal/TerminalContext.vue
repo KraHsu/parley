@@ -2,6 +2,9 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useCodexStore } from '../codex/store'
+import { useSettingsStore } from '../settings/store'
+import StudyText from '../vocabulary/StudyText.vue'
+import type { VocabularySource } from '../vocabulary/types'
 import {
   autoSelectThread,
   studyContext,
@@ -11,16 +14,19 @@ import {
 } from './context'
 const props = defineProps<{ startedAt: number }>()
 const codex = useCodexStore()
+const settings = useSettingsStore()
 const threads = ref<TerminalThread[]>([])
 const messages = ref<TerminalMessage[]>([])
 const threadId = ref('')
+const messageId = ref('')
 const selection = ref('')
+const frozen = ref(false)
 const error = ref('')
 const reading = ref(false)
-const quote = ref<HTMLElement>()
 const latest = computed(
   () =>
-    [...messages.value].reverse().find((message) => message.role === 'assistant') ??
+    messages.value.find((m) => m.id === messageId.value) ??
+    [...messages.value].reverse().find((m) => m.role === 'assistant') ??
     messages.value.at(-1),
 )
 let generation = 0
@@ -33,8 +39,8 @@ function schedule() {
 async function refresh() {
   clearTimeout(timer)
   if (!codex.connected || disposed) return
-  const current = ++generation
-  const requested = threadId.value
+  const current = ++generation,
+    requested = threadId.value
   reading.value = true
   try {
     const result = await invoke<TerminalSnapshot>('codex_terminal_context', {
@@ -50,10 +56,12 @@ async function refresh() {
         return
       }
     }
-    const previous = latest.value?.id
-    messages.value = result.messages
-    if (latest.value?.id !== previous) selection.value = ''
-    codex.terminalContext = studyContext(messages.value, selection.value)
+    if (!frozen.value) {
+      const previous = latest.value?.id
+      messages.value = result.messages
+      if (latest.value?.id !== previous) selection.value = ''
+      codex.terminalContext = studyContext(messages.value, selection.value)
+    }
   } catch (e) {
     if (current === generation && !disposed) {
       error.value = String(e)
@@ -70,12 +78,19 @@ watch(
   threadId,
   () => {
     selection.value = ''
+    messageId.value = ''
+    frozen.value = false
     messages.value = []
     codex.terminalContext = ''
     void refresh()
   },
   { flush: 'sync' },
 )
+watch(messageId, () => {
+  selection.value = ''
+  frozen.value = false
+  codex.terminalContext = studyContext(latest.value ? [latest.value] : messages.value)
+})
 watch(
   () => codex.connected,
   (connected) => {
@@ -89,19 +104,16 @@ watch(
   },
   { immediate: true },
 )
-function selectPassage() {
-  const selected = window.getSelection()
-  if (
-    !selected ||
-    !quote.value?.contains(selected.anchorNode) ||
-    !quote.value.contains(selected.focusNode)
-  )
-    return
-  selection.value = selected.toString().trim()
+function selectedPassage(source: VocabularySource | null) {
+  selection.value = source?.selectedText ?? ''
   codex.terminalContext = studyContext(messages.value, selection.value)
 }
 async function ask(mode: 'explain' | 'translate') {
   codex.tutorMode = mode
+  codex.terminalContext = studyContext(
+    latest.value ? [latest.value] : messages.value,
+    selection.value,
+  )
   await codex.send(
     'tutor',
     mode === 'translate'
@@ -130,13 +142,35 @@ onUnmounted(() => {
       </select></label
     >
     <p v-if="!threadId" class="settings-help">
-      新对话会自动关联；恢复历史对话时，可从上方选择，无需复制。
+      新对话会自动关联；恢复历史对话时，从上方选择，无需复制。
     </p>
     <details v-if="latest">
-      <summary>{{ selection ? '已选中片段 · 查看终端内容' : '查看终端最近回复' }}</summary>
-      <blockquote ref="quote" @mouseup="selectPassage" @keyup="selectPassage">
-        {{ latest.text }}
-      </blockquote>
+      <summary>{{ selection ? '已选中片段 · 查看终端内容' : '查看终端最近消息' }}</summary>
+      <label
+        >查看消息<select v-model="messageId">
+          <option value="">跟随最近回复</option>
+          <option v-for="message in messages" :key="message.id" :value="message.id">
+            {{ message.role === 'assistant' ? 'GPT' : '你' }} · {{ message.text.slice(0, 45) }}
+          </option>
+        </select></label
+      >
+      <StudyText
+        :key="`${threadId}:${latest.id}`"
+        :text="latest.text"
+        :language="settings.targetLanguage"
+        :origin="{
+          sourceKind: 'terminal',
+          conversationId: null,
+          messageId: null,
+          threadId: latest.threadId ?? threadId,
+          turnId: latest.turnId ?? null,
+          itemId: latest.id,
+          role: latest.role,
+          truncated: latest.truncated ?? false,
+        }"
+        @freeze="frozen = $event"
+        @selection="selectedPassage"
+      />
     </details>
     <div class="terminal-context-actions">
       <button
@@ -144,16 +178,14 @@ onUnmounted(() => {
         :disabled="!codex.ready || !codex.terminalContext || codex.lanes.tutor.busy"
         @click="ask('explain')"
       >
-        解释{{ selection ? '选中片段' : '当前回复' }}
-      </button>
-      <button
+        解释{{ selection ? '选中片段' : '当前回复' }}</button
+      ><button
         class="secondary-button"
         :disabled="!codex.ready || !codex.terminalContext || codex.lanes.tutor.busy"
         @click="ask('translate')"
       >
-        翻译
-      </button>
-      <span>{{ threadId ? '自动同步已保存的对话' : reading ? '正在关联…' : '等待关联' }}</span>
+        翻译</button
+      ><span>{{ threadId ? '自动同步已保存的对话' : reading ? '正在关联…' : '等待关联' }}</span>
     </div>
     <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
   </section>
