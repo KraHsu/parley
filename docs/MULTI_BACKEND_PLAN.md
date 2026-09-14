@@ -1,6 +1,6 @@
 # 多模型后端开发计划
 
-状态：**开发中，Diesel 业务迁移与 Linux 开发包 API 学习闭环已验证，各后端实测与发布验收继续推进，尚未达到首版交付条件**。基于 v0.3.0 / `55cb6a5`；文档与官方接口核对日期：2026-09-14。作为 v0.4.0 的主线，保留 Vue + Rust + Tauri 技术栈。具体增量与验证见 [实现记录](MULTI_BACKEND_IMPLEMENTATION.md)。
+状态：**开发中，Diesel 业务迁移、Linux 开发包 API 学习闭环与 Claude 原生终端同步已验证，各后端实测与发布验收继续推进，尚未达到首版交付条件**。基于 v0.3.0 / `55cb6a5`；文档与官方接口核对日期：2026-09-14。作为 v0.4.0 的主线，保留 Vue + Rust + Tauri 技术栈。具体增量与验证见 [实现记录](MULTI_BACKEND_IMPLEMENTATION.md)。
 
 2026-09-14 技术决策更新：用户选择 **Diesel** 作为 Rust 与 SQLite 的业务访问层。P1 增加存储层迁移，新增 API 工作同时遵守此决定；完整交付范围保持不变。
 
@@ -142,7 +142,7 @@ API Key 保存到系统凭据库：Linux Secret Service、macOS Keychain、Windo
 
 ### 5.3 原生终端伴随
 
-开发分支已实现以下语法，现有命令继续兼容；交互式 TUI 与完整桌面联动仍待验收：
+开发分支已实现以下语法，现有命令继续兼容；Claude 原生 TUI 的两轮真实回复、API fixture 助手答疑及收藏已通过，其他组合与真实 API 服务继续验收：
 
 ```bash
 parley-cli                                  # 保持默认 Codex

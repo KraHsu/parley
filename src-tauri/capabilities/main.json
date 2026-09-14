@@ -15,6 +15,7 @@
     "allow-backend-stop",
     "allow-backend-disconnect",
     "allow-get-launch-options",
+    "allow-claude-terminal-context",
     "allow-codex-connect",
     "allow-codex-disconnect",
     "allow-codex-status",

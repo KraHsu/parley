@@ -12,6 +12,7 @@ fn main() {
             "backend_stop",
             "backend_disconnect",
             "get_launch_options",
+            "claude_terminal_context",
             "codex_connect",
             "codex_disconnect",
             "codex_status",

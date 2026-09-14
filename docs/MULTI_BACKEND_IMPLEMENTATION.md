@@ -307,3 +307,20 @@ Rust **107 项**普通测试、前端 **62 项**测试通过；格式、TypeScri
 ![实际 IBus 拼音候选框](screenshots/multi-package-ime.png)
 
 测试窗口、Xvfb、D-Bus 及回环服务均正常结束。真实 API 厂商、完整 CLI/API 安装版组合及其他平台原生运行仍是未完成验收项。
+
+## 2026-09-14：Claude 原生 TUI 与语言助手实测
+
+修复路径夹具后的 `731a8c9` 在 Linux、macOS、Windows 三个平台通过完整 CI（[run 34860914892](https://github.com/KraHsu/parley/actions/runs/34860914892)）。
+
+使用 Linux 开发 deb 解包后的 `parley-cli` 和 `parley`，配合用户已登录的官方 Claude Code 2.1.269，在临时工作目录、独立 Parley 数据目录与 Xvfb 中运行原生 TUI。首次真实回复揭示 `claude_terminal_context` 虽已注册 handler，却遗漏 Tauri build manifest 和窗口 capability，导致 GUI 报 ACL 拒绝。补齐命令及其生成权限后重新构建 deb，从包中提取新版二进制重试。
+
+- 原生 CLI 使用 `--model fable`，两轮分别回复 “Learning languages takes practice.” 和 “Practice a little every day.”。GUI 无需复制，自动跟随两轮的新消息；界面说明只包含启动后收到的最近六轮。
+- 在 GUI 添加仅本次会话有效的 Responses fixture 配置并读取模型。通过助手提问一次，回环服务验证认证头且返回完整 SSE；Diesel 中保存的 `provider_input` 自动包含上述两轮终端问答，turn 为 complete。API 回答是固定测试数据，不作为真实厂商或语言质量验收。
+- 从终端原句点击“收藏整句”，手动填写中文释义并保存。词条来源为 `claude_code / anthropic`，thread 使用 `claude-code:` 命名空间，保存实际终端 turn/item 和原句快照；没有误归属到 API 助手。数据库完整性与外键检查通过。
+- 正常关闭 GUI 后原生 TUI 仍运行，随后 `/exit` 以状态 0 退出。此时 GUI hook 服务已关闭，CLI 输出一条 SessionEnd hook 连接失败提示；该已知限制保留在兼容记录中。测试 GUI、CLI、Xvfb 和回环服务均已回收。
+
+![Claude 原生回复收藏及来源](screenshots/multi-claude-terminal-word.png)
+
+首次 CLI 运行触发官方自动更新器，将本机 Claude 启动链接指向测试数据目录；已原子恢复为原有 2.1.269，复核解析路径正确。后续验证直接指定该版本可执行文件，并仅对测试进程设置 `DISABLE_AUTOUPDATER=1`。没有修改 Parley 的 CLI 选择逻辑，也没有复制登录凭据到 GUI 或 API 配置；宿主机已安装 Parley 和正式学习数据库保持原状。
+
+ACL 修复通过本地格式、类型、Clippy 检查及发布包构建，终端模块普通测试通过；实际包窗口验证覆盖了之前单元测试未触及的权限集成问题。真实 API 厂商、Claude GUI API 凭据模式及其他组合仍待验收。

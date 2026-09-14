@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-claude-terminal-context"
+description = "Enables the claude_terminal_context command without any pre-configured scope."
+commands.allow = ["claude_terminal_context"]
+
+[[permission]]
+identifier = "deny-claude-terminal-context"
+description = "Denies the claude_terminal_context command without any pre-configured scope."
+commands.deny = ["claude_terminal_context"]
