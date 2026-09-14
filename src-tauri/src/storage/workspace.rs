@@ -168,7 +168,7 @@ impl Storage {
                     ConversationRow::as_select(),
                     (b::profile_id, b::profile_revision, v::config).nullable(),
                 ))
-                .order((c::updated_at.desc(), c::created_at.desc(), c::id.desc()))
+                .order((c::updated_at.desc(), c::rowid.desc()))
                 .load::<(ConversationRow, Option<(String, i64, String)>)>(db)?
                 .into_iter()
                 .map(|(row, binding)| row.into_conversation(binding))

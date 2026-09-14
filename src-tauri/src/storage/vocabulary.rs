@@ -1,88 +1,56 @@
+use super::learning_rows::{EntryRow, OccurrenceRow, instr, length, trim};
+use super::schema::{
+    messages as m, vocabulary_cards as c, vocabulary_drafts as d, vocabulary_entries as e,
+    vocabulary_entry_tags as et, vocabulary_mutations as mutations, vocabulary_occurrences as o,
+    vocabulary_tags as tags,
+};
 use super::{Storage, error, now};
 use crate::vocabulary::*;
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use diesel::{dsl::exists, prelude::*};
 use serde::{Serialize, de::DeserializeOwned};
 
-pub(super) const ENTRY_COLUMNS: &str = "id,language,language_label,kind,text,meaning,meaning_language,note,revision,created_at,updated_at,deleted_at";
-pub(super) fn entry_row(row: &Row<'_>) -> rusqlite::Result<Entry> {
-    Ok(Entry {
-        id: row.get(0)?,
-        fields: EntryFields {
-            language: row.get(1)?,
-            language_label: row.get(2)?,
-            kind: row.get(3)?,
-            text: row.get(4)?,
-            meaning: row.get(5)?,
-            meaning_language: row.get(6)?,
-            note: row.get(7)?,
-        },
-        revision: row.get(8)?,
-        created_at: row.get(9)?,
-        updated_at: row.get(10)?,
-        deleted_at: row.get(11)?,
-        occurrences: vec![],
-        tags: vec![],
-        cards: vec![],
-    })
-}
-pub(super) fn get_entry(db: &Connection, id: &str) -> Result<Entry> {
-    let mut entry = db
-        .query_row(
-            &format!("SELECT {ENTRY_COLUMNS} FROM vocabulary_entries WHERE id=?1"),
-            [id],
-            entry_row,
-        )
+pub(super) fn get_entry(db: &mut SqliteConnection, id: &str) -> Result<Entry> {
+    let mut entry: Entry = e::table
+        .find(id)
+        .select(EntryRow::as_select())
+        .first::<EntryRow>(db)
         .optional()
         .map_err(error)?
-        .ok_or("词句已不存在，请刷新列表。")?;
-    let mut query = db.prepare("SELECT id,source_kind,conversation_id,message_id,thread_id,turn_id,item_id,role,selected_text,snapshot,start,end,locator_version,truncated,snapshot_hash FROM vocabulary_occurrences WHERE entry_id=?1 ORDER BY rowid").map_err(error)?;
-    entry.occurrences = query
-        .query_map([id], |r| {
-            Ok(Occurrence {
-                id: r.get(0)?,
-                source: Source {
-                    source_kind: r.get(1)?,
-                    conversation_id: r.get(2)?,
-                    message_id: r.get(3)?,
-                    thread_id: r.get(4)?,
-                    turn_id: r.get(5)?,
-                    item_id: r.get(6)?,
-                    role: r.get(7)?,
-                    selected_text: r.get(8)?,
-                    snapshot: r.get(9)?,
-                    start: r.get::<_, u32>(10)? as usize,
-                    end: r.get::<_, u32>(11)? as usize,
-                    locator_version: r.get(12)?,
-                    truncated: r.get(13)?,
-                },
-                snapshot_hash: r.get(14)?,
-            })
-        })
+        .ok_or("词句已不存在，请刷新列表。")?
+        .into();
+    entry.occurrences = o::table
+        .filter(o::entry_id.eq(id))
+        .order(o::rowid)
+        .select(OccurrenceRow::as_select())
+        .load::<OccurrenceRow>(db)
         .map_err(error)?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(error)?;
+        .into_iter()
+        .map(TryInto::try_into)
+        .collect::<Result<_>>()?;
     entry.tags = super::review::get_tags(db, id)?;
     entry.cards = super::review::get_cards(db, id)?;
     Ok(entry)
 }
 pub(super) fn fingerprint(value: &impl Serialize) -> Result<String> {
     serde_json::to_string(value)
-        .map(|value| digest(&value))
+        .map(|s| digest(&s))
         .map_err(error)
 }
 pub(super) fn cached<T: DeserializeOwned>(
-    db: &Connection,
+    db: &mut SqliteConnection,
     id: &str,
     operation: &str,
     hash: &str,
 ) -> Result<Option<T>> {
     uuid(id)?;
-    let previous: Option<(String, String, String)> = db
-        .query_row(
-            "SELECT operation,fingerprint,result FROM vocabulary_mutations WHERE request_id=?1",
-            [id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
+    let previous = mutations::table
+        .find(id)
+        .select((
+            mutations::operation,
+            mutations::fingerprint,
+            mutations::result,
+        ))
+        .first::<(String, String, String)>(db)
         .optional()
         .map_err(error)?;
     if let Some((op, fingerprint, result)) = previous {
@@ -94,23 +62,22 @@ pub(super) fn cached<T: DeserializeOwned>(
     Ok(None)
 }
 pub(super) fn remember(
-    db: &Connection,
+    db: &mut SqliteConnection,
     id: &str,
     operation: &str,
     hash: &str,
     result: &impl Serialize,
 ) -> Result<()> {
-    db.execute(
-        "INSERT INTO vocabulary_mutations VALUES(?1,?2,?3,?4,?5)",
-        params![
-            id,
-            operation,
-            hash,
-            serde_json::to_string(result).map_err(error)?,
-            now()
-        ],
-    )
-    .map_err(error)?;
+    diesel::insert_into(mutations::table)
+        .values((
+            mutations::request_id.eq(id),
+            mutations::operation.eq(operation),
+            mutations::fingerprint.eq(hash),
+            mutations::result.eq(serde_json::to_string(result).map_err(error)?),
+            mutations::created_at.eq(now()),
+        ))
+        .execute(db)
+        .map_err(error)?;
     Ok(())
 }
 pub(super) fn check_revision(entry: &Entry, revision: i64) -> Result<()> {
@@ -120,118 +87,180 @@ pub(super) fn check_revision(entry: &Entry, revision: i64) -> Result<()> {
     Ok(())
 }
 pub(super) fn insert_entry(
-    db: &Connection,
+    db: &mut SqliteConnection,
     id: &str,
-    fields: &EntryFields,
+    f: &EntryFields,
     time: i64,
 ) -> Result<()> {
-    db.execute("INSERT INTO vocabulary_entries(id,language,language_label,kind,text,lookup_key,meaning,meaning_language,note,search_text,revision,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,1,?11,?11)", params![id,language(&fields.language)?,fields.language_label,fields.kind,fields.text,normalized(&fields.text),fields.meaning,language(&fields.meaning_language)?,fields.note,fields.search_text(),time]).map_err(error)?;
+    diesel::insert_into(e::table)
+        .values((
+            e::id.eq(id),
+            e::language.eq(language(&f.language)?),
+            e::language_label.eq(&f.language_label),
+            e::kind.eq(&f.kind),
+            e::text.eq(&f.text),
+            e::lookup_key.eq(normalized(&f.text)),
+            e::meaning.eq(&f.meaning),
+            e::meaning_language.eq(language(&f.meaning_language)?),
+            e::note.eq(&f.note),
+            e::search_text.eq(f.search_text()),
+            e::revision.eq(1_i64),
+            e::created_at.eq(time),
+            e::updated_at.eq(time),
+        ))
+        .execute(db)
+        .map_err(error)?;
     Ok(())
 }
-pub(super) fn insert_source(db: &Connection, entry_id: &str, source: &Source) -> Result<()> {
+pub(super) fn insert_source(
+    db: &mut SqliteConnection,
+    entry_id: &str,
+    source: &Source,
+) -> Result<()> {
     source.validate()?;
     let mut source = source.clone();
     let hash = source.fingerprint();
     if let (Some(conversation), Some(message)) = (&source.conversation_id, &source.message_id) {
-        let found: bool = db
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id=?1 AND id=?2)",
-                params![conversation, message],
-                |r| r.get(0),
-            )
-            .map_err(error)?;
+        let found = diesel::select(exists(
+            m::table
+                .filter(m::conversation_id.eq(conversation))
+                .filter(m::id.eq(message)),
+        ))
+        .get_result::<bool>(db)
+        .map_err(error)?;
         if !found {
             source.conversation_id = None;
             source.message_id = None;
         }
     }
-    db.execute("INSERT INTO vocabulary_occurrences(id,entry_id,source_kind,conversation_id,message_id,thread_id,turn_id,item_id,role,selected_text,snapshot,snapshot_hash,start,end,locator_version,truncated,fingerprint) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17) ON CONFLICT(entry_id,fingerprint) DO NOTHING", params![uuid::Uuid::new_v4().to_string(),entry_id,source.source_kind,source.conversation_id,source.message_id,source.thread_id,source.turn_id,source.item_id,source.role,source.selected_text,source.snapshot,digest(&source.snapshot),source.start as i64,source.end as i64,source.locator_version,source.truncated,hash]).map_err(error)?;
+    diesel::insert_into(o::table)
+        .values((
+            o::id.eq(uuid::Uuid::new_v4().to_string()),
+            o::entry_id.eq(entry_id),
+            o::source_kind.eq(&source.source_kind),
+            o::conversation_id.eq(&source.conversation_id),
+            o::message_id.eq(&source.message_id),
+            o::thread_id.eq(&source.thread_id),
+            o::turn_id.eq(&source.turn_id),
+            o::item_id.eq(&source.item_id),
+            o::role.eq(&source.role),
+            o::selected_text.eq(&source.selected_text),
+            o::snapshot.eq(&source.snapshot),
+            o::snapshot_hash.eq(digest(&source.snapshot)),
+            o::start.eq(source.start as i64),
+            o::end.eq(source.end as i64),
+            o::locator_version.eq(i64::from(source.locator_version)),
+            o::truncated.eq(i64::from(source.truncated)),
+            o::fingerprint.eq(hash),
+        ))
+        .on_conflict((o::entry_id, o::fingerprint))
+        .do_nothing()
+        .execute(db)
+        .map_err(error)?;
     Ok(())
 }
-fn clear_draft(db: &Connection, id: &Option<String>) -> Result<()> {
+fn clear_draft(db: &mut SqliteConnection, id: &Option<String>) -> Result<()> {
     if let Some(id) = id {
-        db.execute("DELETE FROM vocabulary_drafts WHERE id=?1", [id])
+        diesel::delete(d::table.find(id))
+            .execute(db)
             .map_err(error)?;
     }
     Ok(())
 }
+fn filtered(query: &ListQuery, time: i64) -> e::BoxedQuery<'_, diesel::sqlite::Sqlite> {
+    let mut rows = e::table.into_boxed();
+    rows = if query.trash {
+        rows.filter(e::deleted_at.is_not_null())
+    } else {
+        rows.filter(e::deleted_at.is_null())
+    };
+    if !query.language.is_empty() {
+        rows = rows.filter(e::language.eq(&query.language));
+    }
+    if !query.kind.is_empty() {
+        rows = rows.filter(e::kind.eq(&query.kind));
+    }
+    if let Some(has_meaning) = query.has_meaning {
+        rows = rows.filter(length(trim(e::meaning)).gt(0_i64).eq(has_meaning));
+    }
+    let search = normalized(query.search.trim());
+    if !search.is_empty() {
+        rows = rows.filter(instr(e::search_text, search).gt(0_i64));
+    }
+    if !query.tag.is_empty() {
+        rows = rows.filter(exists(
+            et::table
+                .inner_join(tags::table.on(tags::id.eq(et::tag_id)))
+                .filter(et::entry_id.eq(e::id))
+                .filter(tags::name.eq(&query.tag)),
+        ));
+    }
+    let cards = c::table.filter(c::entry_id.eq(e::id));
+    match query.review_status.as_str() {
+        "none" => rows = rows.filter(diesel::dsl::not(exists(cards))),
+        "due" => {
+            rows = rows
+                .filter(length(trim(e::meaning)).gt(0_i64))
+                .filter(exists(
+                    cards
+                        .filter(c::suspended.eq(0_i64))
+                        .filter(c::due_at.le(time)),
+                ))
+        }
+        "suspended" => rows = rows.filter(exists(cards.filter(c::suspended.eq(1_i64)))),
+        "" => {}
+        _ => rows = rows.filter(e::id.eq("")),
+    }
+    rows
+}
 impl Storage {
     pub fn vocabulary_get(&self, id: &str) -> Result<Entry> {
-        get_entry(&self.db.lock().unwrap(), id)
+        self.repository(|db| get_entry(db, id))
     }
     pub fn vocabulary_list(&self, query: &ListQuery) -> Result<EntryPage> {
         bounded(&query.search, 2000, "搜索文字")?;
         bounded(&query.language, 100, "语言代码")?;
-        let filter = "WHERE ((?1=1 AND deleted_at IS NOT NULL) OR (?1=0 AND deleted_at IS NULL)) AND (?2='' OR language=?2) AND (?3='' OR kind=?3) AND (?4 IS NULL OR (length(trim(meaning))>0)=?4) AND (?5='' OR instr(search_text,?5)>0) AND (?7='' OR EXISTS(SELECT 1 FROM vocabulary_entry_tags et JOIN vocabulary_tags t ON t.id=et.tag_id WHERE et.entry_id=vocabulary_entries.id AND t.name=?7)) AND (?8='' OR (?8='none' AND NOT EXISTS(SELECT 1 FROM vocabulary_cards c WHERE c.entry_id=vocabulary_entries.id)) OR EXISTS(SELECT 1 FROM vocabulary_cards c WHERE c.entry_id=vocabulary_entries.id AND ((?8='due' AND c.suspended=0 AND c.due_at<=?9 AND length(trim(meaning))>0) OR (?8='suspended' AND c.suspended=1))))";
-        let order = if query.sort == "created" {
-            "created_at"
-        } else {
-            "updated_at"
-        };
-        let search = normalized(query.search.trim());
-        let db = self.db.lock().unwrap();
-        let total = db
-            .query_row(
-                &format!("SELECT count(*) FROM vocabulary_entries {filter}"),
-                params![
-                    query.trash,
-                    query.language,
-                    query.kind,
-                    query.has_meaning,
-                    search,
-                    query.offset,
-                    query.tag,
-                    query.review_status,
-                    now()
-                ],
-                |r| r.get(0),
-            )
-            .map_err(error)?;
-        let mut stmt = db.prepare(&format!("SELECT {ENTRY_COLUMNS} FROM vocabulary_entries {filter} ORDER BY {order} DESC,id LIMIT 50 OFFSET ?6")).map_err(error)?;
-        let entries = stmt
-            .query_map(
-                params![
-                    query.trash,
-                    query.language,
-                    query.kind,
-                    query.has_meaning,
-                    search,
-                    query.offset,
-                    query.tag,
-                    query.review_status,
-                    now()
-                ],
-                entry_row,
-            )
-            .map_err(error)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(error)?;
-        let mut stmt = db
-            .prepare("SELECT DISTINCT language FROM vocabulary_entries ORDER BY language")
-            .map_err(error)?;
-        let languages = stmt
-            .query_map([], |r| r.get(0))
-            .map_err(error)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(error)?;
-        Ok(EntryPage {
-            entries,
-            total,
-            languages,
-            tags: db
-                .prepare("SELECT name FROM vocabulary_tags ORDER BY name")
+        self.repository(|db| {
+            let time = now();
+            let total = filtered(query, time)
+                .count()
+                .get_result::<i64>(db)
+                .map_err(error)?;
+            let rows = filtered(query, time);
+            let rows = if query.sort == "created" {
+                rows.order((e::created_at.desc(), e::id))
+            } else {
+                rows.order((e::updated_at.desc(), e::id))
+            };
+            let entries = rows
+                .limit(50)
+                .offset(i64::from(query.offset))
+                .select(EntryRow::as_select())
+                .load::<EntryRow>(db)
                 .map_err(error)?
-                .query_map([], |r| r.get(0))
-                .map_err(error)?
-                .collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(error)?,
-            active_count: db
-                .query_row(
-                    "SELECT count(*) FROM vocabulary_entries WHERE deleted_at IS NULL",
-                    [],
-                    |r| r.get(0),
-                )
-                .map_err(error)?,
+                .into_iter()
+                .map(Into::into)
+                .collect();
+            Ok(EntryPage {
+                entries,
+                total,
+                languages: e::table
+                    .select(e::language)
+                    .distinct()
+                    .order(e::language)
+                    .load(db)
+                    .map_err(error)?,
+                tags: tags::table
+                    .select(tags::name)
+                    .order(tags::name)
+                    .load(db)
+                    .map_err(error)?,
+                active_count: e::table
+                    .filter(e::deleted_at.is_null())
+                    .count()
+                    .get_result(db)
+                    .map_err(error)?,
+            })
         })
     }
     pub fn vocabulary_save(&self, request: &SaveRequest) -> Result<SaveResult> {
@@ -246,112 +275,137 @@ impl Storage {
             uuid(id)?;
         }
         let hash = fingerprint(request)?;
-        let mut db = self.db.lock().unwrap();
-        let tx = db.transaction().map_err(error)?;
-        if let Some(previous) = cached::<SaveResult>(&tx, &request.request_id, "save", &hash)? {
-            return Ok(SaveResult {
-                entry: get_entry(&tx, &previous.entry.id)?,
-                duplicate: previous.duplicate,
-            });
-        }
-        if request.id.is_none()
-            && !request.allow_duplicate
-            && let Some(source) = &request.occurrence
-        {
-            let existing: Option<String> = tx.query_row("SELECT e.id FROM vocabulary_entries e JOIN vocabulary_occurrences o ON o.entry_id=e.id WHERE o.fingerprint=?1 AND e.language=?2 AND e.deleted_at IS NULL ORDER BY e.created_at LIMIT 1", params![source.fingerprint(),language(&request.fields.language)?], |r| r.get(0)).optional().map_err(error)?;
-            if let Some(id) = existing {
-                // Leave the form draft intact so a new meaning is never silently discarded.
+        self.repository_transaction(|db| {
+            if let Some(previous) = cached::<SaveResult>(db, &request.request_id, "save", &hash)? {
                 return Ok(SaveResult {
-                    entry: get_entry(&tx, &id)?,
-                    duplicate: true,
+                    entry: get_entry(db, &previous.entry.id)?,
+                    duplicate: previous.duplicate,
                 });
             }
-        }
-        let id = request
-            .id
-            .clone()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        if request.id.is_some() {
-            let current = get_entry(&tx, &id)?;
-            check_revision(
-                &current,
-                request
-                    .expected_revision
-                    .ok_or("缺少编辑版本，请重新打开词句。")?,
-            )?;
-            if current.deleted_at.is_some() {
-                return Err("请先从回收站恢复词句。".into());
+            if request.id.is_none()
+                && !request.allow_duplicate
+                && let Some(source) = &request.occurrence
+            {
+                let existing = e::table
+                    .inner_join(o::table.on(o::entry_id.eq(e::id)))
+                    .filter(o::fingerprint.eq(source.fingerprint()))
+                    .filter(e::language.eq(language(&request.fields.language)?))
+                    .filter(e::deleted_at.is_null())
+                    .order(e::created_at)
+                    .select(e::id)
+                    .first::<String>(db)
+                    .optional()
+                    .map_err(error)?;
+                // Preserve the draft so a newly entered meaning is never silently discarded.
+                if let Some(id) = existing {
+                    return Ok(SaveResult {
+                        entry: get_entry(db, &id)?,
+                        duplicate: true,
+                    });
+                }
             }
-            let f = &request.fields;
-            tx.execute("UPDATE vocabulary_entries SET language=?2,language_label=?3,kind=?4,text=?5,lookup_key=?6,meaning=?7,meaning_language=?8,note=?9,search_text=?10,revision=revision+1,updated_at=?11 WHERE id=?1",params![id,language(&f.language)?,f.language_label,f.kind,f.text,normalized(&f.text),f.meaning,language(&f.meaning_language)?,f.note,f.search_text(),now()]).map_err(error)?;
-        } else {
-            insert_entry(&tx, &id, &request.fields, now())?;
-        }
-        if let Some(source) = &request.occurrence {
-            insert_source(&tx, &id, source)?;
-        }
-        super::review::set_tags(&tx, &id, &request.tags)?;
-        clear_draft(&tx, &request.draft_id)?;
-        let result = SaveResult {
-            entry: get_entry(&tx, &id)?,
-            duplicate: false,
-        };
-        remember(&tx, &request.request_id, "save", &hash, &result)?;
-        tx.commit().map_err(error)?;
-        Ok(result)
+            let id = request
+                .id
+                .clone()
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            if request.id.is_some() {
+                let current = get_entry(db, &id)?;
+                check_revision(
+                    &current,
+                    request
+                        .expected_revision
+                        .ok_or("缺少编辑版本，请重新打开词句。")?,
+                )?;
+                if current.deleted_at.is_some() {
+                    return Err("请先从回收站恢复词句。".into());
+                }
+                let f = &request.fields;
+                diesel::update(e::table.find(&id))
+                    .set((
+                        e::language.eq(language(&f.language)?),
+                        e::language_label.eq(&f.language_label),
+                        e::kind.eq(&f.kind),
+                        e::text.eq(&f.text),
+                        e::lookup_key.eq(normalized(&f.text)),
+                        e::meaning.eq(&f.meaning),
+                        e::meaning_language.eq(language(&f.meaning_language)?),
+                        e::note.eq(&f.note),
+                        e::search_text.eq(f.search_text()),
+                        e::revision.eq(e::revision + 1_i64),
+                        e::updated_at.eq(now()),
+                    ))
+                    .execute(db)
+                    .map_err(error)?;
+            } else {
+                insert_entry(db, &id, &request.fields, now())?;
+            }
+            if let Some(source) = &request.occurrence {
+                insert_source(db, &id, source)?;
+            }
+            super::review::set_tags(db, &id, &request.tags)?;
+            clear_draft(db, &request.draft_id)?;
+            let result = SaveResult {
+                entry: get_entry(db, &id)?,
+                duplicate: false,
+            };
+            remember(db, &request.request_id, "save", &hash, &result)?;
+            Ok(result)
+        })
     }
     pub fn vocabulary_add_occurrence(&self, request: &AddOccurrence) -> Result<Entry> {
         request.source.validate()?;
         let hash = fingerprint(request)?;
-        let mut db = self.db.lock().unwrap();
-        let tx = db.transaction().map_err(error)?;
-        if cached::<String>(&tx, &request.request_id, "occurrence", &hash)?.is_some() {
-            return get_entry(&tx, &request.id);
-        }
-        let entry = get_entry(&tx, &request.id)?;
-        check_revision(&entry, request.expected_revision)?;
-        if entry.deleted_at.is_some() {
-            return Err("请先恢复词句。".into());
-        }
-        insert_source(&tx, &request.id, &request.source)?;
-        tx.execute(
-            "UPDATE vocabulary_entries SET revision=revision+1,updated_at=?2 WHERE id=?1",
-            params![request.id, now()],
-        )
-        .map_err(error)?;
-        clear_draft(&tx, &request.draft_id)?;
-        remember(&tx, &request.request_id, "occurrence", &hash, &request.id)?;
-        let result = get_entry(&tx, &request.id)?;
-        tx.commit().map_err(error)?;
-        Ok(result)
+        self.repository_transaction(|db| {
+            if cached::<String>(db, &request.request_id, "occurrence", &hash)?.is_some() {
+                return get_entry(db, &request.id);
+            }
+            let entry = get_entry(db, &request.id)?;
+            check_revision(&entry, request.expected_revision)?;
+            if entry.deleted_at.is_some() {
+                return Err("请先恢复词句。".into());
+            }
+            insert_source(db, &request.id, &request.source)?;
+            diesel::update(e::table.find(&request.id))
+                .set((e::revision.eq(e::revision + 1_i64), e::updated_at.eq(now())))
+                .execute(db)
+                .map_err(error)?;
+            clear_draft(db, &request.draft_id)?;
+            remember(db, &request.request_id, "occurrence", &hash, &request.id)?;
+            get_entry(db, &request.id)
+        })
     }
     pub fn vocabulary_mutate(&self, request: &EntryMutation, operation: &str) -> Result<()> {
         let hash = fingerprint(request)?;
-        let mut db = self.db.lock().unwrap();
-        let tx = db.transaction().map_err(error)?;
-        if cached::<bool>(&tx, &request.request_id, operation, &hash)?.is_some() {
-            return Ok(());
-        }
-        let entry = get_entry(&tx, &request.id)?;
-        check_revision(&entry, request.expected_revision)?;
-        match operation {
-            "trash" => {
-                tx.execute("UPDATE vocabulary_entries SET deleted_at=?2,updated_at=?2,revision=revision+1 WHERE id=?1",params![request.id,now()]).map_err(error)?;
+        self.repository_transaction(|db| {
+            if cached::<bool>(db, &request.request_id, operation, &hash)?.is_some() {
+                return Ok(());
             }
-            "restore" => {
-                tx.execute("UPDATE vocabulary_entries SET deleted_at=NULL,updated_at=?2,revision=revision+1 WHERE id=?1",params![request.id,now()]).map_err(error)?;
-            }
-            "purge" => {
-                if entry.deleted_at.is_none() {
-                    return Err("请先将词句移入回收站。".into());
+            let entry = get_entry(db, &request.id)?;
+            check_revision(&entry, request.expected_revision)?;
+            match operation {
+                "trash" | "restore" => {
+                    let time = now();
+                    diesel::update(e::table.find(&request.id))
+                        .set((
+                            e::deleted_at.eq((operation == "trash").then_some(time)),
+                            e::updated_at.eq(time),
+                            e::revision.eq(e::revision + 1_i64),
+                        ))
+                        .execute(db)
+                        .map_err(error)?;
                 }
-                tx.execute("DELETE FROM vocabulary_entries WHERE id=?1", [&request.id])
-                    .map_err(error)?;
+                "purge" => {
+                    if entry.deleted_at.is_none() {
+                        return Err("请先将词句移入回收站。".into());
+                    }
+                    diesel::delete(e::table.find(&request.id))
+                        .execute(db)
+                        .map_err(error)?;
+                }
+                _ => return Err("未知词句操作。".into()),
             }
-            _ => return Err("未知词句操作。".into()),
-        }
-        remember(&tx, &request.request_id, operation, &hash, &true)?;
-        tx.commit().map_err(error)
+            remember(db, &request.request_id, operation, &hash, &true)
+        })
     }
     pub fn vocabulary_save_draft(&self, draft: &EditDraft) -> Result<()> {
         uuid(&draft.id)?;
@@ -361,48 +415,54 @@ impl Storage {
         if let Some(source) = &draft.occurrence {
             source.validate()?;
         }
-        let db = self.db.lock().unwrap();
-        // A late autosave for a committed form must not recreate its draft.
-        let committed: bool = db
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM vocabulary_mutations WHERE request_id=?1)",
-                [&draft.request_id],
-                |r| r.get(0),
-            )
-            .map_err(error)?;
-        if committed {
-            return Ok(());
-        }
-        db.execute("INSERT INTO vocabulary_drafts(id,entry_id,payload,updated_at) VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET entry_id=excluded.entry_id,payload=excluded.payload,updated_at=excluded.updated_at",params![draft.id,draft.entry_id,serde_json::to_string(draft).map_err(error)?,now()]).map_err(error)?;
-        Ok(())
+        self.repository_transaction(|db| {
+            if diesel::select(exists(mutations::table.find(&draft.request_id)))
+                .get_result::<bool>(db)
+                .map_err(error)?
+            {
+                return Ok(());
+            }
+            let fields = (
+                d::entry_id.eq(&draft.entry_id),
+                d::payload.eq(serde_json::to_string(draft).map_err(error)?),
+                d::updated_at.eq(now()),
+            );
+            diesel::insert_into(d::table)
+                .values((d::id.eq(&draft.id), fields.clone()))
+                .on_conflict(d::id)
+                .do_update()
+                .set(fields)
+                .execute(db)
+                .map_err(error)?;
+            Ok(())
+        })
     }
     pub fn vocabulary_load_drafts(&self) -> Result<Vec<EditDraft>> {
-        let db = self.db.lock().unwrap();
-        let mut stmt = db
-            .prepare("SELECT payload FROM vocabulary_drafts ORDER BY updated_at DESC")
-            .map_err(error)?;
-        let data = stmt
-            .query_map([], |r| r.get::<_, String>(0))
-            .map_err(error)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(error)?;
-        data.iter()
-            .map(|s| serde_json::from_str(s).map_err(error))
-            .collect()
+        self.repository(|db| {
+            d::table
+                .select(d::payload)
+                .order(d::updated_at.desc())
+                .load::<String>(db)
+                .map_err(error)?
+                .into_iter()
+                .map(|s| serde_json::from_str(&s).map_err(error))
+                .collect()
+        })
     }
     pub fn vocabulary_discard_draft(&self, id: &str) -> Result<()> {
-        self.db
-            .lock()
-            .unwrap()
-            .execute("DELETE FROM vocabulary_drafts WHERE id=?1", [id])
-            .map_err(error)?;
-        Ok(())
+        self.repository(|db| {
+            diesel::delete(d::table.find(id))
+                .execute(db)
+                .map_err(error)?;
+            Ok(())
+        })
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::super::test_support::{integer, text};
     use super::*;
+    use diesel::connection::SimpleConnection;
     fn id() -> String {
         uuid::Uuid::new_v4().to_string()
     }
@@ -556,7 +616,7 @@ mod tests {
         let storage = Storage::memory();
         storage.create("first", "main").unwrap();
         storage.create("second", "main").unwrap();
-        storage.db.lock().unwrap().execute_batch("INSERT INTO messages(id,conversation_id,role,text,status) VALUES('same','first','assistant','How have you been?','complete'),('same','second','assistant','Different context','complete');").unwrap();
+        storage.db.lock().unwrap().batch_execute("INSERT INTO messages(id,conversation_id,role,text,status) VALUES('same','first','assistant','How have you been?','complete'),('same','second','assistant','Different context','complete');").unwrap();
         let mut req = request();
         let src = req.occurrence.as_mut().unwrap();
         src.source_kind = "main".into();
@@ -621,15 +681,78 @@ mod tests {
         storage.vocabulary_mutate(&op, "purge").unwrap();
         storage.vocabulary_mutate(&op, "purge").unwrap();
         assert!(storage.vocabulary_get(&entry.id).is_err());
-        let count: i64 = storage
-            .db
-            .lock()
-            .unwrap()
-            .query_row("SELECT count(*) FROM vocabulary_occurrences", [], |r| {
-                r.get(0)
-            })
+        let count = o::table
+            .count()
+            .get_result::<i64>(&mut *storage.db.lock().unwrap())
             .unwrap();
         assert_eq!(count, 0);
+    }
+    #[test]
+    fn source_insertion_order_survives_backup_and_combined_filters() {
+        let storage = Storage::memory();
+        let mut req = request();
+        req.tags = vec!["daily".into()];
+        let first = storage.vocabulary_save(&req).unwrap().entry;
+        let mut second = source();
+        second.snapshot.push_str(" — second example");
+        let updated = storage
+            .vocabulary_add_occurrence(&AddOccurrence {
+                request_id: id(),
+                id: first.id.clone(),
+                expected_revision: 1,
+                source: second.clone(),
+                draft_id: None,
+            })
+            .unwrap();
+        storage
+            .repository(|db| {
+                diesel::update(o::table.find(&updated.occurrences[0].id))
+                    .set(o::id.eq("ffffffff-ffff-4fff-8fff-ffffffffffff"))
+                    .execute(db)
+                    .map_err(error)?;
+                diesel::update(o::table.find(&updated.occurrences[1].id))
+                    .set(o::id.eq("00000000-0000-4000-8000-000000000001"))
+                    .execute(db)
+                    .map_err(error)?;
+                Ok(())
+            })
+            .unwrap();
+        let backup = storage.vocabulary_backup(false).unwrap();
+        let target = Storage::memory();
+        let (_, pending) = target.vocabulary_preview(backup.clone()).unwrap();
+        target.vocabulary_import(&pending, &id(), false).unwrap();
+        let occurrences = target.vocabulary_get(&first.id).unwrap().occurrences;
+        assert_eq!(occurrences[0].source, source());
+        assert_eq!(occurrences[1].source, second);
+        assert_eq!(
+            serde_json::to_value(&target.vocabulary_backup(false).unwrap().entries).unwrap(),
+            serde_json::to_value(&backup.entries).unwrap()
+        );
+        let mut filter = ListQuery {
+            language: "en".into(),
+            kind: "phrase".into(),
+            has_meaning: Some(true),
+            search: "have you".into(),
+            tag: "daily".into(),
+            review_status: "none".into(),
+            ..Default::default()
+        };
+        assert_eq!(target.vocabulary_list(&filter).unwrap().total, 1);
+        target
+            .vocabulary_card_save(&crate::review::CardRequest {
+                request_id: id(),
+                entry_id: first.id.clone(),
+                direction: "recognition".into(),
+                suspended: false,
+                reset: false,
+                expected_revision: None,
+            })
+            .unwrap();
+        assert_eq!(target.vocabulary_list(&filter).unwrap().total, 0);
+        filter.review_status = "due".into();
+        assert_eq!(target.vocabulary_list(&filter).unwrap().total, 1);
+        filter.has_meaning = Some(false);
+        assert_eq!(target.vocabulary_list(&filter).unwrap().total, 0);
     }
     #[test]
     fn nfc_search_preserves_case_and_language_filter_and_paginates() {
@@ -683,49 +806,42 @@ mod tests {
     }
     #[test]
     fn migration_upgrades_legacy_workspace_and_rolls_back_failed_additions() {
-        let mut legacy = Connection::open_in_memory().unwrap();
+        let mut legacy = super::super::typed::connect(":memory:").unwrap();
         legacy
-            .execute_batch(include_str!("../../migrations/001_workspace.sql"))
+            .batch_execute(include_str!("../../migrations/001_workspace.sql"))
             .unwrap();
-        legacy
-            .execute(
-                "INSERT INTO preferences VALUES(1,?1)",
-                [r#"{"targetLanguage":"ja"}"#],
-            )
+        diesel::insert_into(super::super::schema::preferences::table)
+            .values((
+                super::super::schema::preferences::id.eq(1_i64),
+                super::super::schema::preferences::value.eq(r#"{"targetLanguage":"ja"}"#),
+            ))
+            .execute(&mut legacy)
             .unwrap();
         super::super::migrate(&mut legacy).unwrap();
+        assert_eq!(super::super::schema_version(&mut legacy).unwrap(), 5);
         assert_eq!(
-            legacy
-                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
-                .unwrap(),
-            5
-        );
-        assert_eq!(
-            legacy
-                .query_row("SELECT value FROM preferences", [], |r| r
-                    .get::<_, String>(0))
-                .unwrap(),
+            text(&mut legacy, "SELECT value FROM preferences"),
             r#"{"targetLanguage":"ja"}"#
         );
-        let mut broken = Connection::open_in_memory().unwrap();
+        let mut broken = super::super::typed::connect(":memory:").unwrap();
         broken
-            .execute_batch(include_str!("../../migrations/001_workspace.sql"))
+            .batch_execute(include_str!("../../migrations/001_workspace.sql"))
             .unwrap();
-        broken.execute_batch("CREATE TABLE vocabulary_occurrences(original TEXT);INSERT INTO vocabulary_occurrences VALUES('preserve');").unwrap();
+        broken.batch_execute("CREATE TABLE vocabulary_occurrences(original TEXT);INSERT INTO vocabulary_occurrences VALUES('preserve');").unwrap();
         assert!(super::super::migrate(&mut broken).is_err());
+        assert_eq!(super::super::schema_version(&mut broken).unwrap(), 1);
         assert_eq!(
-            broken
-                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
-                .unwrap(),
-            1
+            integer(
+                &mut broken,
+                "SELECT count(*) AS value FROM sqlite_master WHERE name='vocabulary_entries'"
+            ),
+            0
         );
-        assert!(broken.prepare("SELECT * FROM vocabulary_entries").is_err());
         assert_eq!(
-            broken
-                .query_row("SELECT original FROM vocabulary_occurrences", [], |r| {
-                    r.get::<_, String>(0)
-                })
-                .unwrap(),
+            text(
+                &mut broken,
+                "SELECT original AS value FROM vocabulary_occurrences"
+            ),
             "preserve"
         );
     }
@@ -756,18 +872,18 @@ mod tests {
     fn vocabulary_search_benchmark_10000() {
         let directory = tempfile::tempdir().unwrap();
         let storage = Storage::open(&directory.path().join("benchmark.sqlite3")).unwrap();
-        {
-            let mut db = storage.db.lock().unwrap();
-            let tx = db.transaction().unwrap();
-            for i in 0..10000 {
-                let mut fields = fields();
-                fields.text = format!("expression {i} café 日本語 العربية");
-                fields.meaning =
-                    format!("Meaning {i}: a realistic short explanation with context.");
-                insert_entry(&tx, &id(), &fields, i).unwrap();
-            }
-            tx.commit().unwrap();
-        }
+        storage
+            .repository_transaction(|db| {
+                for i in 0..10000 {
+                    let mut fields = fields();
+                    fields.text = format!("expression {i} café 日本語 العربية");
+                    fields.meaning =
+                        format!("Meaning {i}: a realistic short explanation with context.");
+                    insert_entry(db, &id(), &fields, i)?;
+                }
+                Ok(())
+            })
+            .unwrap();
         let mut elapsed = Vec::new();
         for i in 0..60 {
             let search = match i % 4 {

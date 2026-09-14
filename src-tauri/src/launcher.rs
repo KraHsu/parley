@@ -1,6 +1,7 @@
 //! Launch the user's unchanged Codex TUI alongside the grammar GUI.
 use crate::storage::Preferences;
-use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use crate::storage::schema::preferences as pref;
+use diesel::prelude::*;
 use serde::Serialize;
 use std::{
     ffi::OsString,
@@ -100,12 +101,14 @@ fn saved_codex(path: &Path) -> Result<PathBuf, String> {
         return Err("请先在 Parley 设置中填写 Codex 路径，或使用 --codex /完整路径/codex。".into());
     }
     // Read existing settings without migrations, writer locks or changing the workspace.
-    let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|e| e.to_string())?;
-    let value: Option<String> = db
-        .query_row("SELECT value FROM preferences WHERE id=1", [], |row| {
-            row.get(0)
-        })
+    let absolute = path.canonicalize().map_err(|e| e.to_string())?;
+    let mut uri = url::Url::from_file_path(absolute).map_err(|_| "数据路径无效。")?;
+    uri.set_query(Some("mode=ro"));
+    let mut db = SqliteConnection::establish(uri.as_str()).map_err(|e| e.to_string())?;
+    let value = pref::table
+        .find(1_i64)
+        .select(pref::value)
+        .first::<String>(&mut db)
         .optional()
         .map_err(|e| format!("读取 Codex 路径失败：{e}"))?;
     let preferences: Preferences =
@@ -277,6 +280,7 @@ pub fn run_cli() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use diesel::connection::SimpleConnection;
     #[test]
     #[cfg(unix)]
     fn selected_shim_finds_its_sibling_runtime_without_shell_startup() {
@@ -331,19 +335,22 @@ mod tests {
     fn reads_user_selection_without_changing_preferences() {
         let path =
             std::env::temp_dir().join(format!("parley-launcher-{}.sqlite3", std::process::id()));
-        let db = Connection::open(&path).unwrap();
-        db.execute_batch("CREATE TABLE preferences(id INTEGER PRIMARY KEY, value TEXT)")
+        let mut db = SqliteConnection::establish(path.to_str().unwrap()).unwrap();
+        db.batch_execute("CREATE TABLE preferences(id INTEGER PRIMARY KEY, value TEXT)")
             .unwrap();
         let value = r#"{"codexPath":"/My Tools/codex","targetLanguage":"ja"}"#;
-        db.execute("INSERT INTO preferences VALUES(1, ?1)", [value])
+        diesel::insert_into(pref::table)
+            .values((pref::id.eq(1_i64), pref::value.eq(value)))
+            .execute(&mut db)
             .unwrap();
         assert_eq!(
             saved_codex(&path).unwrap(),
             PathBuf::from("/My Tools/codex")
         );
         assert_eq!(
-            db.query_row("SELECT value FROM preferences", [], |row| row
-                .get::<_, String>(0))
+            pref::table
+                .select(pref::value)
+                .first::<String>(&mut db)
                 .unwrap(),
             value
         );

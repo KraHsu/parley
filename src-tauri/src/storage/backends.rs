@@ -1,18 +1,6 @@
 use super::*;
 use crate::backends::types::{BackendProfile, DEFAULT_CODEX_PROFILE, SaveProfile};
 
-#[cfg(test)]
-fn profile_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BackendProfile> {
-    let config: String = row.get(2)?;
-    Ok(BackendProfile {
-        id: row.get(0)?,
-        revision: row.get(1)?,
-        config: serde_json::from_str(&config).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
-        })?,
-    })
-}
-
 pub(super) fn sync_codex_path(
     db: &mut diesel::SqliteConnection,
     path: &str,
@@ -260,8 +248,10 @@ impl Storage {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_support::integer;
     use super::*;
     use crate::backends::types::{BackendKind, ProfileConfig, Provider};
+    use diesel::prelude::*;
 
     #[test]
     fn upgrade_creates_a_readable_pre_migration_backup() {
@@ -274,11 +264,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("parley.sqlite3");
         {
-            let db = Connection::open(&path).unwrap();
+            let mut db = SqliteConnection::establish(path.to_str().unwrap()).unwrap();
             for migration in &super::super::MIGRATIONS[..version] {
-                db.execute_batch(migration).unwrap();
+                db.batch_execute(migration).unwrap();
             }
-            db.execute_batch("PRAGMA journal_mode=WAL; INSERT INTO preferences VALUES(1,'{\"targetLanguage\":\"ja\"}');").unwrap();
+            db.batch_execute("PRAGMA journal_mode=WAL; INSERT INTO preferences VALUES(1,'{\"targetLanguage\":\"ja\"}');").unwrap();
         }
         let storage = Storage::open(&path).unwrap();
         assert_eq!(storage.preferences().unwrap().target_language, "ja");
@@ -293,23 +283,19 @@ mod tests {
             })
             .collect();
         assert_eq!(backups.len(), 1);
-        let backup =
-            Connection::open_with_flags(&backups[0], rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-                .unwrap();
+        let mut uri = url::Url::from_file_path(&backups[0]).unwrap();
+        uri.set_query(Some("mode=ro"));
+        let mut backup = SqliteConnection::establish(uri.as_str()).unwrap();
         assert_eq!(
-            backup
-                .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
-                .unwrap(),
+            super::super::schema_version(&mut backup).unwrap(),
             version as i64
         );
+        let saved = super::super::schema::preferences::table
+            .select(super::super::schema::preferences::value)
+            .first::<String>(&mut backup)
+            .unwrap();
         assert_eq!(
-            backup
-                .query_row(
-                    "SELECT json_extract(value,'$.targetLanguage') FROM preferences",
-                    [],
-                    |r| r.get::<_, String>(0)
-                )
-                .unwrap(),
+            serde_json::from_str::<Value>(&saved).unwrap()["targetLanguage"],
             "ja"
         );
     }
@@ -437,50 +423,56 @@ mod tests {
 
     #[test]
     fn version_three_migration_keeps_original_threads_and_message_ids() {
-        let mut db = Connection::open_in_memory().unwrap();
+        let mut db = super::super::typed::connect(":memory:").unwrap();
         for migration in &super::super::MIGRATIONS[..3] {
-            db.execute_batch(migration).unwrap();
+            db.batch_execute(migration).unwrap();
         }
-        db.execute(
-            "INSERT INTO preferences VALUES(1,?1)",
-            [r#"{"codexPath":"/old tools/codex","mainModel":"original-model"}"#],
-        )
-        .unwrap();
-        db.execute_batch("INSERT INTO conversations(id,pane,thread_id,account,signature,created_at,updated_at) VALUES('old','main','original-thread','original-account','original-signature',1,1); INSERT INTO messages(id,conversation_id,role,text,status) VALUES('original-item','old','assistant','原句','complete');").unwrap();
-        super::super::migrate(&mut db).unwrap();
-        let profile = db
-            .query_row(
-                "SELECT id,revision,config FROM backend_profiles",
-                [],
-                profile_row,
-            )
+        use super::super::schema::{
+            conversation_backends as b, conversations as c, messages as m, preferences as pref,
+        };
+        diesel::insert_into(pref::table)
+            .values((
+                pref::id.eq(1_i64),
+                pref::value.eq(r#"{"codexPath":"/old tools/codex","mainModel":"original-model"}"#),
+            ))
+            .execute(&mut db)
             .unwrap();
-        assert_eq!(profile.config.binary_path, "/old tools/codex");
-        let original: (String,String,String,String) = db.query_row("SELECT thread_id,account,signature,m.id FROM conversations c JOIN messages m ON c.id=m.conversation_id", [], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+        db.batch_execute("INSERT INTO conversations(id,pane,thread_id,account,signature,created_at,updated_at) VALUES('old','main','original-thread','original-account','original-signature',1,1); INSERT INTO messages(id,conversation_id,role,text,status) VALUES('original-item','old','assistant','原句','complete');").unwrap();
+        super::super::migrate(&mut db).unwrap();
+        assert_eq!(
+            typed_profile(&mut db, DEFAULT_CODEX_PROFILE)
+                .unwrap()
+                .config
+                .binary_path,
+            "/old tools/codex"
+        );
+        let original = c::table
+            .inner_join(m::table.on(c::id.eq(m::conversation_id)))
+            .select((c::thread_id, c::account, c::signature, m::id))
+            .first::<(Option<String>, Option<String>, String, String)>(&mut db)
+            .unwrap();
         assert_eq!(
             original,
             (
-                "original-thread".into(),
-                "original-account".into(),
+                Some("original-thread".into()),
+                Some("original-account".into()),
                 "original-signature".into(),
                 "original-item".into()
             )
         );
         assert_eq!(
-            db.query_row(
-                "SELECT profile_id FROM conversation_backends WHERE conversation_id='old'",
-                [],
-                |r| r.get::<_, String>(0)
-            )
-            .unwrap(),
+            b::table
+                .find("old")
+                .select(b::profile_id)
+                .first::<String>(&mut db)
+                .unwrap(),
             DEFAULT_CODEX_PROFILE
         );
         assert_eq!(
-            db.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| r
-                .get::<_, i64>(
-                0
-            ))
-            .unwrap(),
+            integer(
+                &mut db,
+                "SELECT count(*) AS value FROM pragma_foreign_key_check"
+            ),
             0
         );
     }

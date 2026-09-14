@@ -1,50 +1,54 @@
+use super::learning_rows::CardRow;
 use super::review::set_tags;
+use super::schema::{
+    vocabulary_cards as c, vocabulary_entries as e, vocabulary_import_records as imports,
+    vocabulary_metadata as metadata, vocabulary_occurrences as o, vocabulary_reviews as r,
+};
 use super::vocabulary::{cached, fingerprint, get_entry, insert_entry, insert_source, remember};
 use super::{Storage, error, now};
 use crate::exchange::*;
 use crate::vocabulary::Result;
-use rusqlite::{Connection, OptionalExtension, params};
+use diesel::{dsl::exists, prelude::*};
 use std::collections::HashMap;
 
-fn backup_entry(db: &Connection, id: &str) -> Result<BackupEntry> {
+#[derive(Queryable, Selectable)]
+#[diesel(table_name=r)]
+struct ReviewRow {
+    id: String,
+    card_id: String,
+    rating: String,
+    reviewed_at: i64,
+    before_state: String,
+    after_state: String,
+    undone_at: Option<i64>,
+}
+fn backup_entry(db: &mut SqliteConnection, id: &str) -> Result<BackupEntry> {
     let entry = get_entry(db, id)?;
     let mut occurrences = entry.occurrences;
     for occurrence in &mut occurrences {
         occurrence.source.conversation_id = None;
         occurrence.source.message_id = None;
     }
-    let mut stmt=db.prepare("SELECT r.id,r.card_id,r.rating,r.reviewed_at,r.before_state,r.after_state,r.undone_at FROM vocabulary_reviews r JOIN vocabulary_cards c ON c.id=r.card_id WHERE c.entry_id=?1 ORDER BY r.reviewed_at,r.id").map_err(error)?;
-    let rows = stmt
-        .query_map([id], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, i64>(3)?,
-                r.get::<_, String>(4)?,
-                r.get::<_, String>(5)?,
-                r.get::<_, Option<i64>>(6)?,
-            ))
-        })
+    let reviews = r::table
+        .inner_join(c::table.on(c::id.eq(r::card_id)))
+        .filter(c::entry_id.eq(id))
+        .order((r::reviewed_at, r::id))
+        .select(ReviewRow::as_select())
+        .load::<ReviewRow>(db)
         .map_err(error)?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(error)?;
-    let reviews = rows
         .into_iter()
-        .map(
-            |(id, card_id, rating, reviewed_at, before, after, undone_at)| {
-                Ok(BackupReview {
-                    id,
-                    card_id,
-                    rating,
-                    reviewed_at,
-                    before_state: serde_json::from_str(&before).map_err(error)?,
-                    after_state: serde_json::from_str(&after).map_err(error)?,
-                    undone_at,
-                })
-            },
-        )
-        .collect::<Result<Vec<_>>>()?;
+        .map(|r| {
+            Ok(BackupReview {
+                id: r.id,
+                card_id: r.card_id,
+                rating: r.rating,
+                reviewed_at: r.reviewed_at,
+                before_state: serde_json::from_str(&r.before_state).map_err(error)?,
+                after_state: serde_json::from_str(&r.after_state).map_err(error)?,
+                undone_at: r.undone_at,
+            })
+        })
+        .collect::<Result<_>>()?;
     Ok(BackupEntry {
         id: entry.id,
         fields: entry.fields,
@@ -64,57 +68,124 @@ struct Decision {
     existing: Option<String>,
     current_hash: Option<String>,
 }
-fn decisions(db: &Connection, backup: &Backup) -> Result<Vec<Decision>> {
-    backup.entries.iter().map(|entry| {
-        let hash=fingerprint(entry)?;
-        let mapped:Option<String>=db.query_row("SELECT local_id FROM vocabulary_import_records WHERE dataset_id=?1 AND record_id=?2 AND content_hash=?3",params![backup.dataset_id,entry.id,hash],|r|r.get(0)).optional().map_err(error)?;
-        if let Some(existing)=mapped {return Ok(Decision{kind:"duplicate",hash, current_hash:Some(fingerprint(&backup_entry(db,&existing)?)?),existing:Some(existing)})}
-        let previous:Option<String>=db.query_row("SELECT local_id FROM vocabulary_import_records WHERE dataset_id=?1 AND record_id=?2 ORDER BY rowid DESC LIMIT 1",params![backup.dataset_id,entry.id],|r|r.get(0)).optional().map_err(error)?;
-        let existing=match previous {Some(id)=>Some(id),None=>db.query_row("SELECT id FROM vocabulary_entries WHERE id=?1",[&entry.id],|r|r.get(0)).optional().map_err(error)?};
-        let current_hash=existing.as_ref().map(|id|backup_entry(db,id).and_then(|entry|fingerprint(&entry))).transpose()?;
-        let kind=if current_hash.as_deref()==Some(&hash) {"duplicate"} else if existing.is_some() {"conflict"} else {"add"};
-        Ok(Decision{kind,hash,existing,current_hash})
-    }).collect()
+fn decisions(db: &mut SqliteConnection, backup: &Backup) -> Result<Vec<Decision>> {
+    backup
+        .entries
+        .iter()
+        .map(|entry| {
+            let hash = fingerprint(entry)?;
+            let mapped = imports::table
+                .find((&backup.dataset_id, &entry.id, &hash))
+                .select(imports::local_id)
+                .first::<String>(db)
+                .optional()
+                .map_err(error)?;
+            if let Some(existing) = mapped {
+                return Ok(Decision {
+                    kind: "duplicate",
+                    hash,
+                    current_hash: Some(fingerprint(&backup_entry(db, &existing)?)?),
+                    existing: Some(existing),
+                });
+            }
+            let previous = imports::table
+                .filter(imports::dataset_id.eq(&backup.dataset_id))
+                .filter(imports::record_id.eq(&entry.id))
+                .order(imports::rowid.desc())
+                .select(imports::local_id)
+                .first::<String>(db)
+                .optional()
+                .map_err(error)?;
+            let existing = match previous {
+                Some(id) => Some(id),
+                None => e::table
+                    .find(&entry.id)
+                    .select(e::id)
+                    .first::<String>(db)
+                    .optional()
+                    .map_err(error)?,
+            };
+            let current_hash = existing
+                .as_ref()
+                .map(|id| backup_entry(db, id).and_then(|entry| fingerprint(&entry)))
+                .transpose()?;
+            let kind = if current_hash.as_deref() == Some(&hash) {
+                "duplicate"
+            } else if existing.is_some() {
+                "conflict"
+            } else {
+                "add"
+            };
+            Ok(Decision {
+                kind,
+                hash,
+                existing,
+                current_hash,
+            })
+        })
+        .collect()
 }
-fn free_id(db: &Connection, table: &str, wanted: &str, copy: bool) -> Result<String> {
-    let exists: bool = db
-        .query_row(
-            &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE id=?1)"),
-            [wanted],
-            |r| r.get(0),
-        )
-        .map_err(error)?;
-    Ok(if exists || copy {
+fn free_id(wanted: &str, copy: bool, exists: bool) -> String {
+    if copy || exists {
         uuid::Uuid::new_v4().to_string()
     } else {
         wanted.to_owned()
-    })
+    }
 }
-fn insert_record(db: &Connection, record: &BackupEntry, copy: bool) -> Result<String> {
-    let id = free_id(db, "vocabulary_entries", &record.id, copy)?;
+fn insert_record(db: &mut SqliteConnection, record: &BackupEntry, copy: bool) -> Result<String> {
+    let id = free_id(
+        &record.id,
+        copy,
+        diesel::select(exists(e::table.find(&record.id)))
+            .get_result::<bool>(db)
+            .map_err(error)?,
+    );
     insert_entry(db, &id, &record.fields, record.created_at)?;
-    db.execute(
-        "UPDATE vocabulary_entries SET updated_at=?2,deleted_at=?3 WHERE id=?1",
-        params![id, record.updated_at, record.deleted_at],
-    )
-    .map_err(error)?;
+    diesel::update(e::table.find(&id))
+        .set((
+            e::updated_at.eq(record.updated_at),
+            e::deleted_at.eq(record.deleted_at),
+        ))
+        .execute(db)
+        .map_err(error)?;
     set_tags(db, &id, &record.tags)?;
     for occurrence in &record.occurrences {
         let mut source = occurrence.source.clone();
         source.conversation_id = None;
         source.message_id = None;
         insert_source(db, &id, &source)?;
-        let occurrence_id = free_id(db, "vocabulary_occurrences", &occurrence.id, copy)?;
-        db.execute(
-            "UPDATE vocabulary_occurrences SET id=?1 WHERE entry_id=?2 AND fingerprint=?3",
-            params![occurrence_id, id, source.fingerprint()],
+        let occurrence_id = free_id(
+            &occurrence.id,
+            copy,
+            diesel::select(exists(o::table.find(&occurrence.id)))
+                .get_result::<bool>(db)
+                .map_err(error)?,
+        );
+        diesel::update(
+            o::table
+                .filter(o::entry_id.eq(&id))
+                .filter(o::fingerprint.eq(source.fingerprint())),
         )
+        .set(o::id.eq(occurrence_id))
+        .execute(db)
         .map_err(error)?;
     }
     let mut cards = HashMap::new();
     for card in &record.cards {
-        let card_id = free_id(db, "vocabulary_cards", &card.id, copy)?;
-        db.execute("INSERT INTO vocabulary_cards(id,entry_id,direction,stage,due_at,last_reviewed_at,suspended,schedule_version,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![card_id,id,card.direction,card.stage,card.due_at,card.last_reviewed_at,card.suspended,card.schedule_version,card.revision]).map_err(error)?;
+        let card_id = free_id(
+            &card.id,
+            copy,
+            diesel::select(exists(c::table.find(&card.id)))
+                .get_result::<bool>(db)
+                .map_err(error)?,
+        );
+        let mut row = CardRow::from(card);
+        row.id = card_id.clone();
+        row.entry_id = id.clone();
+        diesel::insert_into(c::table)
+            .values(row)
+            .execute(db)
+            .map_err(error)?;
         cards.insert(card.id.clone(), card_id);
     }
     for review in &record.reviews {
@@ -125,67 +196,97 @@ fn insert_record(db: &Connection, record: &BackupEntry, copy: bool) -> Result<St
         let mut after = review.after_state.clone();
         after.id = card_id.clone();
         after.entry_id = id.clone();
-        db.execute("INSERT INTO vocabulary_reviews(id,card_id,request_id,rating,reviewed_at,before_state,after_state,undone_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![free_id(db,"vocabulary_reviews",&review.id,copy)?,card_id,uuid::Uuid::new_v4().to_string(),review.rating,review.reviewed_at,serde_json::to_string(&before).map_err(error)?,serde_json::to_string(&after).map_err(error)?,review.undone_at]).map_err(error)?;
+        let review_id = free_id(
+            &review.id,
+            copy,
+            diesel::select(exists(r::table.find(&review.id)))
+                .get_result::<bool>(db)
+                .map_err(error)?,
+        );
+        diesel::insert_into(r::table)
+            .values((
+                r::id.eq(review_id),
+                r::card_id.eq(card_id),
+                r::request_id.eq(uuid::Uuid::new_v4().to_string()),
+                r::rating.eq(&review.rating),
+                r::reviewed_at.eq(review.reviewed_at),
+                r::before_state.eq(serde_json::to_string(&before).map_err(error)?),
+                r::after_state.eq(serde_json::to_string(&after).map_err(error)?),
+                r::undone_at.eq(review.undone_at),
+            ))
+            .execute(db)
+            .map_err(error)?;
     }
     Ok(id)
 }
 impl Storage {
     pub fn vocabulary_backup(&self, include_trash: bool) -> Result<Backup> {
-        let db = self.db.lock().unwrap();
-        db.execute("INSERT INTO vocabulary_metadata(key,value) VALUES('dataset_id',?1) ON CONFLICT(key) DO NOTHING",[uuid::Uuid::new_v4().to_string()]).map_err(error)?;
-        let dataset_id = db
-            .query_row(
-                "SELECT value FROM vocabulary_metadata WHERE key='dataset_id'",
-                [],
-                |r| r.get(0),
-            )
-            .map_err(error)?;
-        let mut stmt=db.prepare("SELECT id FROM vocabulary_entries WHERE ?1=1 OR deleted_at IS NULL ORDER BY created_at,id").map_err(error)?;
-        let ids = stmt
-            .query_map([include_trash], |r| r.get::<_, String>(0))
-            .map_err(error)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(error)?;
-        let entries = ids
-            .into_iter()
-            .map(|id| backup_entry(&db, &id))
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Backup {
-            format: "parley-vocabulary".into(),
-            version: 1,
-            dataset_id,
-            exported_at: now(),
-            entries,
+        self.repository_transaction(|db| {
+            diesel::insert_into(metadata::table)
+                .values((
+                    metadata::key.eq("dataset_id"),
+                    metadata::value.eq(uuid::Uuid::new_v4().to_string()),
+                ))
+                .on_conflict(metadata::key)
+                .do_nothing()
+                .execute(db)
+                .map_err(error)?;
+            let dataset_id = metadata::table
+                .find("dataset_id")
+                .select(metadata::value)
+                .first(db)
+                .map_err(error)?;
+            let mut rows = e::table.into_boxed();
+            if !include_trash {
+                rows = rows.filter(e::deleted_at.is_null());
+            }
+            let ids = rows
+                .order((e::created_at, e::id))
+                .select(e::id)
+                .load::<String>(db)
+                .map_err(error)?;
+            let entries = ids
+                .into_iter()
+                .map(|id| backup_entry(db, &id))
+                .collect::<Result<_>>()?;
+            Ok(Backup {
+                format: "parley-vocabulary".into(),
+                version: 1,
+                dataset_id,
+                exported_at: now(),
+                entries,
+            })
         })
     }
     pub fn vocabulary_preview(&self, backup: Backup) -> Result<(ImportPreview, PendingImport)> {
         backup.validate()?;
-        let db = self.db.lock().unwrap();
-        let decisions = decisions(&db, &backup)?;
-        let token = uuid::Uuid::new_v4().to_string();
-        let preview = ImportPreview {
-            token: token.clone(),
-            entries: backup.entries.len(),
-            added: decisions.iter().filter(|d| d.kind == "add").count(),
-            duplicates: decisions.iter().filter(|d| d.kind == "duplicate").count(),
-            conflicts: decisions.iter().filter(|d| d.kind == "conflict").count(),
-            conflict_examples: backup
-                .entries
-                .iter()
-                .zip(&decisions)
-                .filter(|(_, d)| d.kind == "conflict")
-                .take(20)
-                .map(|(entry, _)| entry.fields.text.chars().take(100).collect())
-                .collect(),
-        };
-        Ok((
-            preview,
-            PendingImport {
-                token,
-                signature: fingerprint(&decisions)?,
-                backup,
-            },
-        ))
+        self.repository(|db| {
+            let decisions = decisions(db, &backup)?;
+            let token = uuid::Uuid::new_v4().to_string();
+            let preview = ImportPreview {
+                token: token.clone(),
+                entries: backup.entries.len(),
+                added: decisions.iter().filter(|d| d.kind == "add").count(),
+                duplicates: decisions.iter().filter(|d| d.kind == "duplicate").count(),
+                conflicts: decisions.iter().filter(|d| d.kind == "conflict").count(),
+                conflict_examples: backup
+                    .entries
+                    .iter()
+                    .zip(&decisions)
+                    .filter(|(_, d)| d.kind == "conflict")
+                    .take(20)
+                    .map(|(entry, _)| entry.fields.text.chars().take(100).collect())
+                    .collect(),
+            };
+            Ok((
+                preview,
+                PendingImport {
+                    token,
+                    signature: fingerprint(&decisions)?,
+                    backup,
+                },
+            ))
+        })
     }
     pub fn vocabulary_import(
         &self,
@@ -194,41 +295,49 @@ impl Storage {
         copy_conflicts: bool,
     ) -> Result<ImportResult> {
         let hash = fingerprint(&(&pending.token, copy_conflicts))?;
-        let mut db = self.db.lock().unwrap();
-        let tx = db.transaction().map_err(error)?;
-        if let Some(result) = cached(&tx, request_id, "import", &hash)? {
-            return Ok(result);
-        }
-        let decisions = decisions(&tx, &pending.backup)?;
-        if fingerprint(&decisions)? != pending.signature {
-            return Err("词句在预览后已有变化，请重新选择文件并预览。".into());
-        }
-        let mut result = ImportResult {
-            added: 0,
-            duplicates: 0,
-            skipped: 0,
-        };
-        for (record, decision) in pending.backup.entries.iter().zip(&decisions) {
-            let id = match decision.kind {
-                "duplicate" => {
-                    result.duplicates += 1;
-                    decision.existing.clone().ok_or("重复记录缺少映射。")?
-                }
-                "conflict" if !copy_conflicts => {
-                    result.skipped += 1;
-                    continue;
-                }
-                _ => {
-                    let id = insert_record(&tx, record, decision.kind == "conflict")?;
-                    result.added += 1;
-                    id
-                }
+        self.repository_transaction(|db| {
+            if let Some(result) = cached(db, request_id, "import", &hash)? {
+                return Ok(result);
+            }
+            let decisions = decisions(db, &pending.backup)?;
+            if fingerprint(&decisions)? != pending.signature {
+                return Err("词句在预览后已有变化，请重新选择文件并预览。".into());
+            }
+            let mut result = ImportResult {
+                added: 0,
+                duplicates: 0,
+                skipped: 0,
             };
-            tx.execute("INSERT INTO vocabulary_import_records(dataset_id,record_id,content_hash,local_id) VALUES(?1,?2,?3,?4) ON CONFLICT DO NOTHING",params![pending.backup.dataset_id,record.id,decision.hash,id]).map_err(error)?;
-        }
-        remember(&tx, request_id, "import", &hash, &result)?;
-        tx.commit().map_err(error)?;
-        Ok(result)
+            for (record, decision) in pending.backup.entries.iter().zip(&decisions) {
+                let id = match decision.kind {
+                    "duplicate" => {
+                        result.duplicates += 1;
+                        decision.existing.clone().ok_or("重复记录缺少映射。")?
+                    }
+                    "conflict" if !copy_conflicts => {
+                        result.skipped += 1;
+                        continue;
+                    }
+                    _ => {
+                        let id = insert_record(db, record, decision.kind == "conflict")?;
+                        result.added += 1;
+                        id
+                    }
+                };
+                diesel::insert_into(imports::table)
+                    .values((
+                        imports::dataset_id.eq(&pending.backup.dataset_id),
+                        imports::record_id.eq(&record.id),
+                        imports::content_hash.eq(&decision.hash),
+                        imports::local_id.eq(id),
+                    ))
+                    .on_conflict_do_nothing()
+                    .execute(db)
+                    .map_err(error)?;
+            }
+            remember(db, request_id, "import", &hash, &result)?;
+            Ok(result)
+        })
     }
 }
 fn cell(text: &str) -> String {
@@ -273,6 +382,7 @@ mod tests {
     use super::*;
     use crate::review::{CardRequest, GradeRequest, TagsRequest};
     use crate::vocabulary::{EntryFields, ListQuery, SaveRequest, Source};
+    use diesel::connection::SimpleConnection;
     fn id() -> String {
         uuid::Uuid::new_v4().to_string()
     }
@@ -435,7 +545,7 @@ mod tests {
         let target = Storage::memory();
         let (_, pending) = target.vocabulary_preview(backup.clone()).unwrap();
         // Simulate an actual write failure inside the transaction, after entry insertion.
-        target.db.lock().unwrap().execute_batch("CREATE TRIGGER fail_source BEFORE INSERT ON vocabulary_occurrences BEGIN SELECT RAISE(ABORT,'disk-like failure'); END;").unwrap();
+        target.db.lock().unwrap().batch_execute("CREATE TRIGGER fail_source BEFORE INSERT ON vocabulary_occurrences BEGIN SELECT RAISE(ABORT,'disk-like failure'); END;").unwrap();
         assert!(target.vocabulary_import(&pending, &id(), false).is_err());
         assert_eq!(
             target.vocabulary_list(&ListQuery::default()).unwrap().total,
@@ -445,18 +555,13 @@ mod tests {
             .db
             .lock()
             .unwrap()
-            .execute_batch("DROP TRIGGER fail_source")
+            .batch_execute("DROP TRIGGER fail_source")
             .unwrap();
         target.vocabulary_import(&pending, &id(), false).unwrap();
         let (_, pending) = target.vocabulary_preview(backup).unwrap();
-        target
-            .db
-            .lock()
-            .unwrap()
-            .execute(
-                "UPDATE vocabulary_entries SET note='changed after preview'",
-                [],
-            )
+        diesel::update(e::table)
+            .set(e::note.eq("changed after preview"))
+            .execute(&mut *target.db.lock().unwrap())
             .unwrap();
         assert!(
             target

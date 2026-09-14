@@ -235,45 +235,78 @@ impl Source {
 use crate::storage::StorageState;
 use tauri::State;
 #[tauri::command]
-pub fn vocabulary_list(state: State<'_, StorageState>, query: ListQuery) -> Result<EntryPage> {
-    state.get()?.vocabulary_list(&query)
+pub async fn vocabulary_list(
+    state: State<'_, StorageState>,
+    query: ListQuery,
+) -> Result<EntryPage> {
+    state
+        .run(move |storage| storage.vocabulary_list(&query))
+        .await
 }
 #[tauri::command]
-pub fn vocabulary_get(state: State<'_, StorageState>, id: String) -> Result<Entry> {
-    state.get()?.vocabulary_get(&id)
+pub async fn vocabulary_get(state: State<'_, StorageState>, id: String) -> Result<Entry> {
+    state.run(move |storage| storage.vocabulary_get(&id)).await
 }
 #[tauri::command]
-pub fn vocabulary_save(state: State<'_, StorageState>, request: SaveRequest) -> Result<SaveResult> {
-    state.get()?.vocabulary_save(&request)
+pub async fn vocabulary_save(
+    state: State<'_, StorageState>,
+    request: SaveRequest,
+) -> Result<SaveResult> {
+    state
+        .run(move |storage| storage.vocabulary_save(&request))
+        .await
 }
 #[tauri::command]
-pub fn vocabulary_add_occurrence(
+pub async fn vocabulary_add_occurrence(
     state: State<'_, StorageState>,
     request: AddOccurrence,
 ) -> Result<Entry> {
-    state.get()?.vocabulary_add_occurrence(&request)
+    state
+        .run(move |storage| storage.vocabulary_add_occurrence(&request))
+        .await
 }
 #[tauri::command]
-pub fn vocabulary_trash(state: State<'_, StorageState>, request: EntryMutation) -> Result<()> {
-    state.get()?.vocabulary_mutate(&request, "trash")
+pub async fn vocabulary_trash(
+    state: State<'_, StorageState>,
+    request: EntryMutation,
+) -> Result<()> {
+    state
+        .run(move |storage| storage.vocabulary_mutate(&request, "trash"))
+        .await
 }
 #[tauri::command]
-pub fn vocabulary_restore(state: State<'_, StorageState>, request: EntryMutation) -> Result<()> {
-    state.get()?.vocabulary_mutate(&request, "restore")
+pub async fn vocabulary_restore(
+    state: State<'_, StorageState>,
+    request: EntryMutation,
+) -> Result<()> {
+    state
+        .run(move |storage| storage.vocabulary_mutate(&request, "restore"))
+        .await
 }
 #[tauri::command]
-pub fn vocabulary_purge(state: State<'_, StorageState>, request: EntryMutation) -> Result<()> {
-    state.get()?.vocabulary_mutate(&request, "purge")
+pub async fn vocabulary_purge(
+    state: State<'_, StorageState>,
+    request: EntryMutation,
+) -> Result<()> {
+    state
+        .run(move |storage| storage.vocabulary_mutate(&request, "purge"))
+        .await
 }
 #[tauri::command]
-pub fn vocabulary_save_draft(state: State<'_, StorageState>, draft: EditDraft) -> Result<()> {
-    state.get()?.vocabulary_save_draft(&draft)
+pub async fn vocabulary_save_draft(state: State<'_, StorageState>, draft: EditDraft) -> Result<()> {
+    state
+        .run(move |storage| storage.vocabulary_save_draft(&draft))
+        .await
 }
 #[tauri::command]
-pub fn vocabulary_load_drafts(state: State<'_, StorageState>) -> Result<Vec<EditDraft>> {
-    state.get()?.vocabulary_load_drafts()
+pub async fn vocabulary_load_drafts(state: State<'_, StorageState>) -> Result<Vec<EditDraft>> {
+    state
+        .run(move |storage| storage.vocabulary_load_drafts())
+        .await
 }
 #[tauri::command]
-pub fn vocabulary_discard_draft(state: State<'_, StorageState>, id: String) -> Result<()> {
-    state.get()?.vocabulary_discard_draft(&id)
+pub async fn vocabulary_discard_draft(state: State<'_, StorageState>, id: String) -> Result<()> {
+    state
+        .run(move |storage| storage.vocabulary_discard_draft(&id))
+        .await
 }

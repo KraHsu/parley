@@ -1,6 +1,4 @@
-//! Transitional connection owner. Both repositories use the legacy mutex as one
-//! application gate; each transaction runs entirely on one SQLite connection.
-//! Remove that compatibility gate when all repositories use Diesel.
+//! One Diesel SQLite connection and one access lock shared by all repositories.
 use diesel::{Connection, SqliteConnection, connection::SimpleConnection};
 use std::fmt;
 
@@ -37,18 +35,29 @@ pub type DbResult<T> = Result<T, DbError>;
 pub fn connect(url: &str) -> Result<SqliteConnection, String> {
     let mut db = SqliteConnection::establish(url).map_err(|e| format!("无法打开 SQLite：{e}"))?;
     // Connection-local SQLite controls cannot be expressed as row CRUD.
-    db.batch_execute("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000; PRAGMA synchronous=FULL;")
+    db.batch_execute("PRAGMA busy_timeout=3000;")
         .map_err(|e| e.to_string())?;
     Ok(db)
 }
 
 impl super::Storage {
+    pub(super) fn repository<T>(
+        &self,
+        operation: impl FnOnce(&mut SqliteConnection) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.typed(|db| operation(db).map_err(Into::into))
+    }
+    pub(super) fn repository_transaction<T>(
+        &self,
+        operation: impl FnOnce(&mut SqliteConnection) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.typed_transaction(|db| operation(db).map_err(Into::into))
+    }
     pub(super) fn typed<T>(
         &self,
         operation: impl FnOnce(&mut SqliteConnection) -> DbResult<T>,
     ) -> Result<T, String> {
-        let _gate = self.db.lock().unwrap();
-        let mut db = self.typed_db.lock().unwrap();
+        let mut db = self.db.lock().unwrap();
         operation(&mut db).map_err(|e| e.to_string())
     }
     pub(super) fn typed_transaction<T>(
@@ -63,7 +72,8 @@ impl super::Storage {
 mod tests {
     #[test]
     fn diesel_schema_matches_every_migrated_sqlite_column_and_primary_key() {
-        let mut db = rusqlite::Connection::open_in_memory().unwrap();
+        use diesel::RunQueryDsl;
+        let mut db = super::connect(":memory:").unwrap();
         super::super::migrate(&mut db).unwrap();
         let schema = include_str!("schema.rs");
         let mut declared_tables = Vec::new();
@@ -105,17 +115,39 @@ mod tests {
                 })
                 .collect();
             // Schema introspection is SQLite metadata, not application CRUD.
-            let actual: Vec<(String, String, bool, i64)> = db
-                .prepare(&format!("PRAGMA table_info({table})"))
-                .unwrap()
-                .query_map([], |r| {
-                    let not_null: bool = r.get(3)?;
-                    let pk: i64 = r.get(5)?;
-                    Ok((r.get(1)?, r.get(2)?, !not_null && pk == 0, pk))
-                })
-                .unwrap()
-                .collect::<rusqlite::Result<_>>()
-                .unwrap();
+            #[derive(diesel::QueryableByName)]
+            struct Column {
+                #[diesel(sql_type=diesel::sql_types::Text)]
+                name: String,
+                #[diesel(sql_type=diesel::sql_types::Text,column_name="type")]
+                ty: String,
+                #[diesel(sql_type=diesel::sql_types::BigInt)]
+                notnull: i64,
+                #[diesel(sql_type=diesel::sql_types::BigInt)]
+                pk: i64,
+            }
+            let mut actual: Vec<(String, String, bool, i64)> =
+                diesel::sql_query(format!("PRAGMA table_info({table})"))
+                    .load::<Column>(&mut db)
+                    .unwrap()
+                    .into_iter()
+                    .map(|r| (r.name, r.ty, r.notnull == 0 && r.pk == 0, r.pk))
+                    .collect();
+            if declared.first().is_some_and(|row| row.0 == "rowid") {
+                // These existing rowid tables use insertion order for sources and undo.
+                // SQLite's implicit rowid is not listed by table_info.
+                assert_eq!(
+                    super::super::test_support::integer(
+                        &mut db,
+                        &format!("SELECT count(rowid) AS value FROM {table}")
+                    ),
+                    super::super::test_support::integer(
+                        &mut db,
+                        &format!("SELECT count(*) AS value FROM {table}")
+                    )
+                );
+                actual.insert(0, ("rowid".into(), "INTEGER".into(), false, 0));
+            }
             assert_eq!(
                 declared,
                 actual
@@ -132,15 +164,19 @@ mod tests {
                 "primary key drift in {table}"
             );
         }
-        let mut tables: Vec<String> = db
-            .prepare(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-            )
-            .unwrap()
-            .query_map([], |r| r.get(0))
-            .unwrap()
-            .collect::<rusqlite::Result<_>>()
-            .unwrap();
+        #[derive(diesel::QueryableByName)]
+        struct Table {
+            #[diesel(sql_type=diesel::sql_types::Text)]
+            name: String,
+        }
+        let mut tables: Vec<String> = diesel::sql_query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+        )
+        .load::<Table>(&mut db)
+        .unwrap()
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
         tables.sort();
         declared_tables.sort();
         assert_eq!(declared_tables, tables);

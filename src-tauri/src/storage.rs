@@ -1,20 +1,21 @@
 pub mod api;
 pub mod backends;
 pub mod exchange;
+mod learning_rows;
 pub mod review;
-mod schema;
+pub(crate) mod schema;
 mod typed;
 pub mod vocabulary;
 mod workspace;
 use crate::backends::types::{ConversationBackend, DEFAULT_CODEX_PROFILE};
-use rusqlite::Connection;
+use diesel::{Connection, RunQueryDsl, SqliteConnection, connection::SimpleConnection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     fs::{File, OpenOptions},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::State;
 
@@ -26,16 +27,26 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/005_api_turns.sql"),
 ];
 
+#[derive(Clone)]
 pub struct StorageState {
     path: std::result::Result<PathBuf, String>,
-    value: Mutex<Option<Storage>>,
+    value: Arc<Mutex<Option<Storage>>>,
 }
 impl StorageState {
     pub fn new(path: std::result::Result<PathBuf, String>) -> Self {
         Self {
             path,
-            value: Mutex::new(None),
+            value: Arc::new(Mutex::new(None)),
         }
+    }
+    pub async fn run<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(Storage) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let state = self.clone();
+        tauri::async_runtime::spawn_blocking(move || operation(state.get()?))
+            .await
+            .map_err(error)?
     }
     pub fn get(&self) -> std::result::Result<Storage, String> {
         let mut value = self.value.lock().unwrap();
@@ -54,8 +65,7 @@ impl StorageState {
 type Result<T> = std::result::Result<T, String>;
 #[derive(Clone)]
 pub struct Storage {
-    db: Arc<Mutex<Connection>>,
-    typed_db: Arc<Mutex<diesel::SqliteConnection>>,
+    db: Arc<Mutex<SqliteConnection>>,
     path: PathBuf,
     _lock: Option<Arc<File>>,
 }
@@ -140,19 +150,30 @@ fn now() -> i64 {
 fn error(e: impl std::fmt::Display) -> String {
     format!("本地数据操作失败：{e}")
 }
-fn migrate(db: &mut Connection) -> Result<()> {
-    let version: i64 = db
-        .pragma_query_value(None, "user_version", |r| r.get(0))
-        .map_err(error)?;
+#[derive(diesel::QueryableByName)]
+struct SchemaVersion {
+    #[diesel(sql_type=diesel::sql_types::BigInt)]
+    user_version: i64,
+}
+fn schema_version(db: &mut SqliteConnection) -> Result<i64> {
+    diesel::sql_query("PRAGMA user_version")
+        .get_result::<SchemaVersion>(db)
+        .map(|r| r.user_version)
+        .map_err(error)
+}
+fn migrate(db: &mut SqliteConnection) -> Result<()> {
+    let version = schema_version(db)?;
     if version < 0 || version as usize > MIGRATIONS.len() {
         return Err("数据库来自更新版本的 Parley。请升级应用；原始数据未改动。".into());
     }
     if (version as usize) < MIGRATIONS.len() {
-        let tx = db.transaction().map_err(error)?;
-        for migration in &MIGRATIONS[version as usize..] {
-            tx.execute_batch(migration).map_err(error)?;
-        }
-        tx.commit().map_err(error)?;
+        db.transaction::<(), diesel::result::Error, _>(|db| {
+            for migration in &MIGRATIONS[version as usize..] {
+                db.batch_execute(migration)?;
+            }
+            Ok(())
+        })
+        .map_err(error)?;
     }
     Ok(())
 }
@@ -178,21 +199,9 @@ impl Storage {
         } else {
             None
         };
-        let database_url = if path == Path::new(":memory:") {
-            format!(
-                "file:parley-{}?mode=memory&cache=shared",
-                uuid::Uuid::new_v4()
-            )
-        } else {
-            path.to_str()
-                .ok_or("数据目录路径不是有效 UTF-8。")?
-                .to_owned()
-        };
-        let mut db = Connection::open(&database_url).map_err(error)?;
-        db.busy_timeout(Duration::from_secs(3)).map_err(error)?;
-        let version: i64 = db
-            .pragma_query_value(None, "user_version", |r| r.get(0))
-            .map_err(error)?;
+        let database_url = path.to_str().ok_or("数据目录路径不是有效 UTF-8。")?;
+        let mut db = typed::connect(database_url)?;
+        let version = schema_version(&mut db)?;
         if path != Path::new(":memory:") && version > 0 && (version as usize) < MIGRATIONS.len() {
             // VACUUM INTO includes committed WAL contents and leaves the source untouched.
             let backup = path.with_file_name(format!(
@@ -200,20 +209,21 @@ impl Storage {
                 MIGRATIONS.len(),
                 uuid::Uuid::new_v4()
             ));
-            db.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])
+            diesel::sql_query("VACUUM INTO ?1")
+                .bind::<diesel::sql_types::Text, _>(backup.to_string_lossy().as_ref())
+                .execute(&mut db)
                 .map_err(|_| {
                     "升级前的数据库备份失败，原始数据未迁移。请检查磁盘空间和目录权限。".to_owned()
                 })?;
         }
         // Version compatibility is checked before modifying an existing database.
         migrate(&mut db)?;
-        db.execute_batch(
+        db.batch_execute(
             "PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;",
         )
         .map_err(error)?;
         let storage = Self {
             db: Arc::new(Mutex::new(db)),
-            typed_db: Arc::new(Mutex::new(typed::connect(&database_url)?)),
             path: path.to_owned(),
             _lock: lock,
         };
@@ -292,7 +302,9 @@ pub async fn storage_delete(storage: State<'_, StorageState>, id: String) -> Res
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::{integer, text};
     use super::*;
+    use diesel::prelude::*;
     fn config() -> ConversationConfig<'static> {
         ConversationConfig {
             model: "test",
@@ -416,37 +428,29 @@ mod tests {
         s.delete("c").unwrap();
         assert!(s.preferences().unwrap().main_id.is_none());
         assert_eq!(
-            s.db.lock()
-                .unwrap()
-                .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get::<_, i64>(0))
+            schema::messages::table
+                .count()
+                .get_result::<i64>(&mut *s.db.lock().unwrap())
                 .unwrap(),
             0
         );
     }
     #[test]
     fn future_schema_and_failed_migration_do_not_destroy_old_data() {
-        let mut future = Connection::open_in_memory().unwrap();
-        future.execute_batch("CREATE TABLE original(value TEXT);INSERT INTO original VALUES('preserve');PRAGMA user_version=99;").unwrap();
+        let mut future = typed::connect(":memory:").unwrap();
+        future.batch_execute("CREATE TABLE original(value TEXT);INSERT INTO original VALUES('preserve');PRAGMA user_version=99;").unwrap();
         assert!(migrate(&mut future).is_err());
-        assert_eq!(
-            future
-                .query_row("SELECT value FROM original", [], |r| r.get::<_, String>(0))
-                .unwrap(),
-            "preserve"
-        );
-        let mut conflict = Connection::open_in_memory().unwrap();
+        assert_eq!(text(&mut future, "SELECT value FROM original"), "preserve");
+        let mut conflict = typed::connect(":memory:").unwrap();
         conflict
-            .execute_batch("CREATE TABLE conversations(original TEXT);")
+            .batch_execute("CREATE TABLE conversations(original TEXT);")
             .unwrap();
         assert!(migrate(&mut conflict).is_err());
         assert_eq!(
-            conflict
-                .query_row(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE name='preferences'",
-                    [],
-                    |r| r.get::<_, i64>(0)
-                )
-                .unwrap(),
+            integer(
+                &mut conflict,
+                "SELECT COUNT(*) AS value FROM sqlite_master WHERE name='preferences'"
+            ),
             0
         );
     }
@@ -463,3 +467,6 @@ mod tests {
 
 #[cfg(test)]
 pub(crate) mod api_tests;
+
+#[cfg(test)]
+pub(crate) mod test_support;

@@ -1,5 +1,6 @@
 // Mirrors the existing SQLite migrations; column types are checked by Diesel.
-// No schema changes are performed by this module.
+// No schema changes are performed by this module. Explicit rowid declarations
+// expose SQLite insertion order used by the pre-Diesel repositories.
 
 diesel::table! {
     backend_credentials (profile_id) {
@@ -38,6 +39,7 @@ diesel::table! {
 
 diesel::table! {
     conversations (id) {
+        rowid -> BigInt,
         id -> Text,
         pane -> Text,
         title -> Text,
@@ -144,6 +146,7 @@ diesel::table! {
 
 diesel::table! {
     vocabulary_import_records (dataset_id, record_id, content_hash) {
+        rowid -> BigInt,
         dataset_id -> Text,
         record_id -> Text,
         content_hash -> Text,
@@ -170,6 +173,7 @@ diesel::table! {
 
 diesel::table! {
     vocabulary_occurrences (id) {
+        rowid -> BigInt,
         id -> Text,
         entry_id -> Text,
         source_kind -> Text,
@@ -192,6 +196,7 @@ diesel::table! {
 
 diesel::table! {
     vocabulary_reviews (id) {
+        rowid -> BigInt,
         id -> Text,
         card_id -> Text,
         request_id -> Text,
