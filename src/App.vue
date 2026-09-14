@@ -133,7 +133,7 @@ async function checkRuntime() {
         <button class="workspace-profile" @click="openSettings" title="学习设置">
           <span class="profile-avatar">P</span
           ><span class="profile-copy"
-            ><strong>我的工作空间</strong><span>本地 · {{ codex.label }}</span></span
+            ><strong>我的工作空间</strong><span>本地 · {{ codex.paneLabel('main') }}</span></span
           ><AppIcon name="settings" :size="17" />
         </button>
       </div>
@@ -164,7 +164,7 @@ async function checkRuntime() {
               </option></select
             ><AppIcon name="chevron" :size="14" /></label
           ><span class="header-separator" /><button class="connection-button" @click="openSettings">
-            <span class="tiny-dot" /><span>{{ codex.label }}</span></button
+            <span class="tiny-dot" /><span>{{ codex.paneLabel('main') }}</span></button
           ><button class="icon-button header-settings" aria-label="学习设置" @click="openSettings">
             <AppIcon name="settings" :size="18" />
           </button>

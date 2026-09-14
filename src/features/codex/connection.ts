@@ -31,6 +31,8 @@ interface Status {
   limits: { rateLimits?: Limit; rateLimitsByLimitId?: Record<string, Limit> } | null
 }
 export interface ServerEvent {
+  profileId?: string
+  profileRevision?: number
   method: string
   params: {
     pane?: Pane
@@ -50,7 +52,13 @@ export interface ServerEvent {
 
 const describe = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
-export const useCodexConnectionStore = defineStore('codex-connection', () => {
+export function createCodexConnection(profileId = 'codex-default') {
+  const profileRevision = ref<number | null>(null)
+  const scope = profileId === 'codex-default' ? {} : { profileId }
+  function rpc<T>(method: string, args: Record<string, unknown> = {}): Promise<T> {
+    const scoped = { ...args, ...scope }
+    return Object.keys(scoped).length ? invoke<T>(method, scoped) : invoke<T>(method)
+  }
   const connected = ref(false)
   const connecting = ref(false)
   const error = ref('')
@@ -106,7 +114,7 @@ export const useCodexConnectionStore = defineStore('codex-connection', () => {
     accountChecked.value = false
     loadingModels.value = false
     try {
-      const status = await invoke<Pick<Status, 'account'>>('codex_status', { section: 'account' })
+      const status = await rpc<Pick<Status, 'account'>>('codex_status', { section: 'account' })
       if (!valid()) return
       account.value = status.account
       accountChecked.value = true
@@ -123,7 +131,7 @@ export const useCodexConnectionStore = defineStore('codex-connection', () => {
       login.value = null
       loadingModels.value = true
       limitsError.value = ''
-      void invoke<Pick<Status, 'limits'>>('codex_status', { section: 'limits' })
+      void rpc<Pick<Status, 'limits'>>('codex_status', { section: 'limits' })
         .then((result) => {
           if (valid()) limits.value = result.limits
         })
@@ -134,7 +142,7 @@ export const useCodexConnectionStore = defineStore('codex-connection', () => {
           }
         })
       try {
-        const result = await invoke<Pick<Status, 'models'>>('codex_status', { section: 'models' })
+        const result = await rpc<Pick<Status, 'models'>>('codex_status', { section: 'models' })
         if (!valid()) return
         models.value = result.models
         if (!result.models.length) error.value = '本机账号已登录，但没有返回可用模型。请刷新重试。'
@@ -151,6 +159,14 @@ export const useCodexConnectionStore = defineStore('codex-connection', () => {
     }
   }
   function receive(event: ServerEvent) {
+    if (event.profileId && event.profileId !== profileId) return
+    if (
+      event.profileRevision &&
+      profileRevision.value &&
+      event.profileRevision !== profileRevision.value
+    )
+      return
+    event = { ...event, profileId }
     const p = event.params
     if (event.method === 'connection/closed') {
       epoch++
@@ -181,7 +197,7 @@ export const useCodexConnectionStore = defineStore('codex-connection', () => {
       limits.value = { ...limits.value, rateLimits: p.rateLimits }
     for (const listener of listeners) listener(event)
   }
-  async function connect(path: string) {
+  async function connect(path: string, revision?: number) {
     if (connecting.value) return
     if (!isDesktop()) {
       error.value = '请运行 npm run desktop:dev，在桌面应用中连接 Codex。'
@@ -192,6 +208,7 @@ export const useCodexConnectionStore = defineStore('codex-connection', () => {
       return
     }
     const current = ++epoch
+    profileRevision.value = revision ?? null
     connecting.value = true
     connected.value = false
     error.value = ''
@@ -201,7 +218,12 @@ export const useCodexConnectionStore = defineStore('codex-connection', () => {
       if (current === epoch) receive(event)
     }
     try {
-      await invoke('codex_connect', { events, codexPath: path })
+      const result = await rpc<{ profileRevision?: number } | null>('codex_connect', {
+        events,
+        codexPath: path,
+        ...(revision === undefined ? {} : { expectedRevision: revision }),
+      })
+      if (current === epoch) profileRevision.value = result?.profileRevision ?? revision ?? null
       if (current !== epoch) return
       connected.value = true
       connecting.value = false
@@ -213,18 +235,27 @@ export const useCodexConnectionStore = defineStore('codex-connection', () => {
     }
   }
   async function disconnect() {
+    receive({
+      method: 'connection/closed',
+      profileId,
+      params: { message: '已断开 Codex，本机账号登录状态保留。' },
+    })
+    const current = epoch
     try {
-      await invoke('codex_disconnect')
+      await rpc('codex_disconnect', { profileId })
     } catch (e) {
-      error.value = describe(e)
+      if (current === epoch) error.value = describe(e)
     }
   }
   async function openLogin() {
     if (!login.value) return
+    const current = epoch
+    const pending = login.value
     try {
-      await invoke('codex_open_login', { url: login.value.authUrl })
+      await rpc('codex_open_login', { url: pending.authUrl })
     } catch (e) {
-      error.value = `无法打开浏览器：${describe(e)}`
+      if (current === epoch && login.value === pending)
+        error.value = `无法打开浏览器：${describe(e)}`
     }
   }
   async function signIn() {
@@ -240,7 +271,7 @@ export const useCodexConnectionStore = defineStore('codex-connection', () => {
         loggingIn.value = false
         return
       }
-      const result = await invoke<{ loginId: string; authUrl: string }>('codex_login')
+      const result = await rpc<{ loginId: string; authUrl: string }>('codex_login')
       if (current !== epoch || attempt !== loginAttempt) return
       login.value = result
       await openLogin()
@@ -253,18 +284,24 @@ export const useCodexConnectionStore = defineStore('codex-connection', () => {
   }
   async function cancelLogin() {
     if (!login.value) return
+    const current = epoch
+    const attempt = ++loginAttempt
+    const pending = login.value
     try {
-      await invoke('codex_cancel_login', { loginId: login.value.loginId })
-      login.value = null
-      loggingIn.value = false
+      await rpc('codex_cancel_login', { loginId: pending.loginId })
+      if (current === epoch && attempt === loginAttempt) {
+        login.value = null
+        loggingIn.value = false
+      }
     } catch (e) {
-      error.value = describe(e)
+      if (current === epoch && attempt === loginAttempt) error.value = describe(e)
     }
   }
   const ready = computed(
     () => connected.value && account.value?.type === 'chatgpt' && models.value.length > 0,
   )
   return {
+    profileRevision,
     connected,
     connecting,
     error,
@@ -289,4 +326,8 @@ export const useCodexConnectionStore = defineStore('codex-connection', () => {
     cancelLogin,
     onEvent,
   }
-})
+}
+
+export const useCodexConnectionStore = defineStore('codex-connection', () =>
+  createCodexConnection(),
+)

@@ -6,6 +6,7 @@ import { useSettingsStore } from '../settings/store'
 import { useBackendStore } from '../backends/store'
 import type { TurnEvent } from '../backends/types'
 
+import { useCodexConnectionsStore } from '../codex/connections'
 import { useCodexConnectionStore, type ServerEvent } from '../codex/connection'
 import type { Pane, VocabularyAnswerTarget, Lane, Conversation, Workspace } from './types'
 export type { Pane, Message, Conversation, VocabularyAnswerTarget } from './types'
@@ -27,6 +28,7 @@ export const useChatStore = defineStore('chat', () => {
   const settings = useSettingsStore()
   const backends = useBackendStore()
   const connection = useCodexConnectionStore()
+  const codexConnections = useCodexConnectionsStore()
   const {
     connected,
     connecting,
@@ -73,9 +75,31 @@ export const useChatStore = defineStore('chat', () => {
   function isReady(pane: Pane) {
     if (!workspaceReady.value || navigating.value) return false
     const binding = lanes[pane].backend
-    return binding.profileId === 'codex-default'
-      ? connection.ready
-      : backends.isReady(binding.profileId, binding.profileRevision)
+    if (binding.kind !== 'codex')
+      return backends.isReady(binding.profileId, binding.profileRevision)
+    const runtime = codexConnections.get(binding.profileId)
+    const profile = backends.profiles.find((p) => p.id === binding.profileId)
+    return (
+      runtime.ready &&
+      (runtime.profileRevision === null || runtime.profileRevision === binding.profileRevision) &&
+      (profile
+        ? profile.config.enabled && profile.revision === binding.profileRevision
+        : binding.profileId === 'codex-default')
+    )
+  }
+  function paneLabel(pane: Pane) {
+    const binding = lanes[pane].backend
+    const profile = backends.profiles.find((p) => p.id === binding.profileId)
+    const name = profile?.config.name ?? (binding.kind === 'codex' ? 'Codex' : '模型服务')
+    if (profile && (!profile.config.enabled || profile.revision !== binding.profileRevision))
+      return `${name} · 配置已变更`
+    const status =
+      binding.kind === 'codex'
+        ? codexConnections.get(binding.profileId).label
+        : isReady(pane)
+          ? '可用'
+          : '待配置'
+    return `${name} · ${status}`
   }
   const ready = computed(() => isReady('main') || isReady('tutor'))
   let applying = false
@@ -318,24 +342,34 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
   function chooseDefaultModels() {
-    const available = models.value
-    const fallback = available.find((m) => m.isDefault)?.model ?? available[0]?.model ?? ''
-    if (lanes.main.backend.profileId === 'codex-default' && !mainModel.value)
-      mainModel.value = fallback
-    if (lanes.tutor.backend.profileId === 'codex-default' && !tutorModel.value)
-      tutorModel.value = available.find((m) => m.model.includes('luna'))?.model ?? fallback
+    for (const pane of ['main', 'tutor'] as const) {
+      if (lanes[pane].backend.kind !== 'codex') continue
+      const available = codexConnections.get(lanes[pane].backend.profileId).models
+      const fallback = available.find((m) => m.isDefault)?.model ?? available[0]?.model ?? ''
+      if (pane === 'main' && !mainModel.value) mainModel.value = fallback
+      if (pane === 'tutor' && !tutorModel.value)
+        tutorModel.value = available.find((m) => m.model.includes('luna'))?.model ?? fallback
+    }
   }
-  watch(models, chooseDefaultModels, { flush: 'sync' })
+  watch(
+    () =>
+      Object.values(lanes).map((lane) =>
+        lane.backend.kind === 'codex' ? codexConnections.get(lane.backend.profileId).models : [],
+      ),
+    chooseDefaultModels,
+    { flush: 'sync' },
+  )
   async function refresh() {
     await connection.refresh()
     chooseDefaultModels()
   }
   function receive(event: ServerEvent) {
     const p = event.params
+    const profileId = event.profileId ?? 'codex-default'
     if (event.method === 'storage/error') storageError.value = p.message ?? '保存失败'
     else if (event.method === 'connection/closed') {
       for (const lane of Object.values(lanes)) {
-        if (lane.backend.profileId !== 'codex-default') continue
+        if (lane.backend.kind !== 'codex' || lane.backend.profileId !== profileId) continue
         if (lane.busy) lane.error = '连接已中断，回复可能不完整。'
         lane.busy = false
         for (const message of lane.messages)
@@ -344,10 +378,13 @@ export const useChatStore = defineStore('chat', () => {
         lane.request++
       }
     }
-    if (!p.pane || !connected.value) return
+    if (!p.pane || !codexConnections.get(profileId).connected) return
     const lane = lanes[p.pane]
     if (
-      lane.backend.profileId !== 'codex-default' ||
+      lane.backend.kind !== 'codex' ||
+      lane.backend.profileId !== profileId ||
+      (event.profileRevision !== undefined &&
+        event.profileRevision !== lane.backend.profileRevision) ||
       (p.conversationId && p.conversationId !== lane.id)
     )
       return
@@ -390,6 +427,7 @@ export const useChatStore = defineStore('chat', () => {
       lane.error = `${p.error?.message ?? '回复失败'}${p.willRetry ? '（Codex 正在重试）' : ''}`
   }
   onScopeDispose(connection.onEvent(receive))
+  onScopeDispose(codexConnections.onEvent(receive))
   async function connect() {
     if (connecting.value) return
     if (!isDesktop()) {
@@ -400,6 +438,20 @@ export const useChatStore = defineStore('chat', () => {
     if (!initialized.value || storageError.value || !(await flush())) return
     await connection.connect(codexPath.value.trim())
     chooseDefaultModels()
+  }
+  async function connectCodexProfile(profileId: string) {
+    if (profileId === 'codex-default') return connect()
+    await initializeWorkspace()
+    if (!initialized.value || closing.value || !(await flush())) return
+    const profile = backends.profiles.find(
+      (p) => p.id === profileId && p.config.kind === 'codex' && p.config.enabled,
+    )
+    if (!profile) return
+    await codexConnections.get(profileId).connect(profile.config.binaryPath, profile.revision)
+    chooseDefaultModels()
+  }
+  function codexScope(id: string) {
+    return id === 'codex-default' ? {} : { profileId: id }
   }
   async function send(
     pane: Pane,
@@ -417,8 +469,8 @@ export const useChatStore = defineStore('chat', () => {
     const initialBackend = { ...lane.backend }
     if (!isReady(pane) || lane.busy || !text.trim() || !model) return false
     if (
-      lane.backend.profileId === 'codex-default' &&
-      !models.value.some((m) => m.model === model)
+      lane.backend.kind === 'codex' &&
+      !codexConnections.get(lane.backend.profileId).models.some((m) => m.model === model)
     ) {
       lane.error = '当前账号不再提供已保存的模型，请在设置中选择可用模型。'
       return false
@@ -469,7 +521,8 @@ export const useChatStore = defineStore('chat', () => {
         terminalContext: terminalSnapshot,
         mode,
       }
-      if (backend.profileId === 'codex-default') await invoke('codex_send', { request: payload })
+      if (backend.kind === 'codex')
+        await invoke('codex_send', { request: payload, ...codexScope(backend.profileId) })
       else {
         let sequence = 0
         let finished = false
@@ -544,7 +597,8 @@ export const useChatStore = defineStore('chat', () => {
   async function stop(pane: Pane) {
     try {
       const lane = lanes[pane]
-      if (lane.backend.profileId === 'codex-default') await invoke('codex_stop', { pane })
+      if (lane.backend.kind === 'codex')
+        await invoke('codex_stop', { pane, ...codexScope(lane.backend.profileId) })
       else
         await invoke('backend_stop', {
           conversationId: lane.id,
@@ -555,8 +609,11 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
   async function resetLane(pane: Pane) {
-    if (connected.value && lanes[pane].backend.profileId === 'codex-default')
-      await invoke('codex_reset', { pane })
+    if (
+      lanes[pane].backend.kind === 'codex' &&
+      codexConnections.get(lanes[pane].backend.profileId).connected
+    )
+      await invoke('codex_reset', { pane, ...codexScope(lanes[pane].backend.profileId) })
     const conversation = await create(pane)
     if (!(await flush()) || closing.value) return
     adopt(pane, conversation)
@@ -594,8 +651,10 @@ export const useChatStore = defineStore('chat', () => {
       lanes[pane].draft = draft
       if (changing) {
         const fallback =
-          profileId === 'codex-default'
-            ? (models.value.find((m) => m.isDefault)?.model ?? models.value[0]?.model ?? '')
+          profile.config.kind === 'codex'
+            ? (codexConnections.get(profileId).models.find((m) => m.isDefault)?.model ??
+              codexConnections.get(profileId).models[0]?.model ??
+              '')
             : (backends.state(profileId).models[0] ?? '')
         if (pane === 'main') mainModel.value = fallback
         else tutorModel.value = fallback
@@ -649,9 +708,11 @@ export const useChatStore = defineStore('chat', () => {
     lanes,
     ready,
     isReady,
+    paneLabel,
     selectBackend,
     label,
     connect,
+    connectCodexProfile,
     disconnect,
     refresh,
     signIn,

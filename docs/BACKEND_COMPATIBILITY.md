@@ -12,7 +12,7 @@
 | Kimi                       | 分片、末块用量、历史 reasoning 回传、多轮、流内错误      | 未验收                          | 不强制通用 thinking / temperature 参数      |
 | GLM / Z.AI                 | 分片、末块用量、空工具字段、多轮、错误信封               | 未验收                          | 测试针对 Z.AI 协议；中国区智谱端点未验收    |
 | 自定义 Chat Completions    | 共享流解析、失败状态及上下文预算                         | 取决于目标服务                  | 仅保证本文列出的文本协议子集                |
-| Codex GUI / 原生终端       | CLI 0.154.0 初始化、既有登录与路由测试                   | 多后端组合待验收                | 多配置运行时仍在推进                        |
+| Codex GUI / 原生终端       | CLI 0.154.0 双配置初始化、既有登录与独立断开             | 多后端组合待验收                | 多配置共享所选 CLI 的本机登录目录           |
 | Claude Code GUI / 原生终端 | CLI 2.1.269 回环 API、显式 session fork、HTTP hooks 共存 | 真实服务与完整交互式 TUI 待验收 | GUI 使用 API Key；终端保留用户原生 CLI 环境 |
 
 ## 兼容接口的请求与历史

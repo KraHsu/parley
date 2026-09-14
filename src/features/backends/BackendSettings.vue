@@ -21,10 +21,10 @@ const notice = ref('')
 const showingForm = ref(false)
 const available = computed(() =>
   backends.profiles.filter(
-    (p) => p.config.enabled && (p.id === 'codex-default' || supportsManagedTurns(p.config.kind)),
+    (p) => p.config.enabled && (p.config.kind === 'codex' || supportsManagedTurns(p.config.kind)),
   ),
 )
-const editable = computed(() => backends.profiles.filter((p) => p.config.kind !== 'codex'))
+const editable = computed(() => backends.profiles.filter((p) => p.id !== 'codex-default'))
 const clearKey = () => {
   key.value = ''
 }
@@ -67,8 +67,12 @@ async function save() {
   try {
     const profile = await backends.save({ ...config.value }, editing.value)
     editing.value = profile
-    if (secret) await backends.setCredential(profile, secret, persist.value)
-    notice.value = '配置已保存。为主聊或语言助手选择此服务后，可读取或手动填写模型 ID。'
+    if (secret && profile.config.kind !== 'codex')
+      await backends.setCredential(profile, secret, persist.value)
+    notice.value =
+      profile.config.kind === 'codex'
+        ? '配置已保存。连接此 Codex 后，可为主聊或语言助手选择服务与模型。'
+        : '配置已保存。为主聊或语言助手选择此服务后，可读取或手动填写模型 ID。'
     showingForm.value = false
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -132,7 +136,7 @@ function modelChoices(pane: 'main' | 'tutor') {
             </option>
           </select>
         </label>
-        <label v-if="chat.lanes[pane].backend.profileId !== 'codex-default'" class="settings-field">
+        <label v-if="chat.lanes[pane].backend.kind !== 'codex'" class="settings-field">
           {{ pane === 'main' ? '主聊模型 ID' : '语言助手模型 ID' }}
           <input
             :value="pane === 'main' ? chat.mainModel : chat.tutorModel"
@@ -166,48 +170,56 @@ function modelChoices(pane: 'main' | 'tutor') {
         更换服务会开启新会话，旧记录保留。未提供余额查询的 API 不显示剩余额度。
       </p>
       <div v-for="profile in editable" :key="profile.id" class="backend-profile">
-        <strong>{{ profile.config.name }}</strong>
-        <span class="subtle-label">{{
-          !profile.config.enabled
-            ? '已停用'
-            : backends.state(profile.id).credential.persistence === 'system'
-              ? '密钥保存在系统凭据库'
-              : backends.state(profile.id).credential.persistence === 'session'
-                ? '密钥仅本次会话可用'
-                : '待配置密钥'
-        }}</span>
-        <p class="settings-help">{{ profile.config.endpoint || profile.config.binaryPath }}</p>
-        <div class="connection-actions">
+        <template v-if="profile.config.kind === 'codex'">
+          <ConnectionSettings :profile="profile" :tutor-only="tutorOnly" />
           <button class="secondary-button" :disabled="busy" @click="edit(profile)">
-            编辑 / 更换密钥
+            编辑 Codex 配置
           </button>
-          <button
-            class="secondary-button"
-            :disabled="
-              !backends.state(profile.id).credential.configured ||
-              backends.state(profile.id).checking
-            "
-            @click="backends.check(profile)"
-          >
-            {{ backends.state(profile.id).checking ? '读取中…' : '检查连接 / 读取模型' }}
-          </button>
-          <button
-            v-if="backends.state(profile.id).credential.configured"
-            class="secondary-button"
-            @click="removeKey(profile)"
-          >
-            删除密钥
-          </button>
-        </div>
-        <p v-if="backends.state(profile.id).models.length" class="settings-help">
-          已读取 {{ backends.state(profile.id).models.length }} 个模型。
-        </p>
-        <p v-if="backends.state(profile.id).error" class="inline-error" role="alert">
-          {{ backends.state(profile.id).error }}
-        </p>
+        </template>
+        <template v-else>
+          <strong>{{ profile.config.name }}</strong>
+          <span class="subtle-label">{{
+            !profile.config.enabled
+              ? '已停用'
+              : backends.state(profile.id).credential.persistence === 'system'
+                ? '密钥保存在系统凭据库'
+                : backends.state(profile.id).credential.persistence === 'session'
+                  ? '密钥仅本次会话可用'
+                  : '待配置密钥'
+          }}</span>
+          <p class="settings-help">{{ profile.config.endpoint || profile.config.binaryPath }}</p>
+          <div class="connection-actions">
+            <button class="secondary-button" :disabled="busy" @click="edit(profile)">
+              编辑 / 更换密钥
+            </button>
+            <button
+              class="secondary-button"
+              :disabled="
+                !backends.state(profile.id).credential.configured ||
+                backends.state(profile.id).checking
+              "
+              @click="backends.check(profile)"
+            >
+              {{ backends.state(profile.id).checking ? '读取中…' : '检查连接 / 读取模型' }}
+            </button>
+            <button
+              v-if="backends.state(profile.id).credential.configured"
+              class="secondary-button"
+              @click="removeKey(profile)"
+            >
+              删除密钥
+            </button>
+          </div>
+          <p v-if="backends.state(profile.id).models.length" class="settings-help">
+            已读取 {{ backends.state(profile.id).models.length }} 个模型。
+          </p>
+          <p v-if="backends.state(profile.id).error" class="inline-error" role="alert">
+            {{ backends.state(profile.id).error }}
+          </p>
+        </template>
       </div>
       <button class="secondary-button" :disabled="!isDesktop() || busy" @click="edit()">
-        添加 API 服务
+        添加模型服务
       </button>
       <form v-if="showingForm" class="backend-form" @submit.prevent="save">
         <label v-if="!editing" class="settings-field"
@@ -225,13 +237,18 @@ function modelChoices(pane: 'main' | 'tutor') {
         <label class="settings-field"
           >配置名称<input v-model="config.name" required maxlength="160" :disabled="busy"
         /></label>
-        <label v-if="config.kind === 'claude_code'" class="settings-field">
-          Claude Code 可执行文件路径
+        <label
+          v-if="config.kind === 'claude_code' || config.kind === 'codex'"
+          class="settings-field"
+        >
+          {{ config.kind === 'codex' ? 'Codex' : 'Claude Code' }} 可执行文件路径
           <input
             v-model="config.binaryPath"
             required
             :disabled="busy"
-            placeholder="本机 claude 的完整路径"
+            :placeholder="
+              config.kind === 'codex' ? '本机 codex 的完整路径' : '本机 claude 的完整路径'
+            "
             spellcheck="false"
           />
         </label>
@@ -239,7 +256,9 @@ function modelChoices(pane: 'main' | 'tutor') {
           使用你安装的官方 Claude Code（已验证 2.1.269）。GUI 使用 API Key
           与独立会话；原生终端保留官方登录。
         </p>
-        <label v-else class="settings-field"
+        <label
+          v-if="config.kind !== 'claude_code' && config.kind !== 'codex'"
+          class="settings-field"
           >API 服务地址<input
             v-model="config.endpoint"
             required
@@ -252,7 +271,7 @@ function modelChoices(pane: 'main' | 'tutor') {
           请从 Model Studio 控制台复制当前区域的 OpenAI 兼容基础地址，通常以 /compatible-mode/v1
           结尾。
         </p>
-        <label class="settings-field"
+        <label v-if="config.kind !== 'codex'" class="settings-field"
           >{{ editing ? '新 API Key（留空保留原密钥）' : 'API Key'
           }}<input
             v-model="key"
@@ -261,7 +280,7 @@ function modelChoices(pane: 'main' | 'tutor') {
             spellcheck="false"
             :disabled="busy"
         /></label>
-        <label class="settings-field"
+        <label v-if="config.kind !== 'codex'" class="settings-field"
           >密钥保存方式<select v-model="persist" :disabled="busy">
             <option :value="true">系统凭据库</option>
             <option :value="false">仅本次会话</option>

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useBackendStore } from './features/backends/store'
 import MessageList from './features/codex/MessageList.vue'
 import TutorPanel from './features/tutor/TutorPanel.vue'
 import TerminalContext from './features/terminal/TerminalContext.vue'
@@ -20,7 +19,6 @@ const props = defineProps<{
   terminalBackend?: 'codex' | 'claude-code'
 }>()
 const settings = useSettingsStore()
-const backends = useBackendStore()
 const view = ref('tutor')
 const vocabulary = useVocabularyStore()
 watch(
@@ -40,11 +38,14 @@ const { codex, closeError, attemptClose } = useWorkspaceWindow(
   () => dialog.value?.close(),
   async () => {
     if (props.initialCodexPath) codex.codexPath = props.initialCodexPath
-    const needsCodex =
-      codex.lanes.tutor.backend.profileId === 'codex-default' ||
-      (!!props.terminalCwd && props.terminalBackend !== 'claude-code')
-    if (needsCodex && isDesktop() && codex.codexPath) await codex.connect()
-    else if (!codex.isReady('tutor')) dialog.value?.showModal()
+    const needsSource = !!props.terminalCwd && props.terminalBackend !== 'claude-code'
+    if (isDesktop()) {
+      if (needsSource && codex.codexPath) await codex.connect()
+      const tutor = codex.lanes.tutor.backend
+      if (tutor.kind === 'codex' && !(needsSource && tutor.profileId === 'codex-default'))
+        await codex.connectCodexProfile(tutor.profileId)
+    }
+    if (!codex.isReady('tutor')) dialog.value?.showModal()
   },
 )
 watch(
@@ -53,11 +54,7 @@ watch(
     if (focus) view.value = focus.pane === 'tutor' ? 'tutor' : 'source-main'
   },
 )
-const assistantLabel = computed(() =>
-  codex.lanes.tutor.backend.profileId === 'codex-default'
-    ? codex.label
-    : `${backends.profiles.find((p) => p.id === codex.lanes.tutor.backend.profileId)?.config.name ?? '语言助手'} · ${codex.isReady('tutor') ? '可用' : '待配置'}`,
-)
+const assistantLabel = computed(() => codex.paneLabel('tutor'))
 </script>
 <template>
   <div class="tutor-app">

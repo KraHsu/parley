@@ -161,4 +161,16 @@ export const presets: { label: string; config: ProfileConfig; available: boolean
     },
     available: true,
   },
+  {
+    label: 'Codex（本机 CLI）',
+    config: {
+      name: 'Codex',
+      kind: 'codex',
+      provider: 'openai',
+      endpoint: '',
+      binaryPath: '',
+      enabled: true,
+    },
+    available: true,
+  },
 ]

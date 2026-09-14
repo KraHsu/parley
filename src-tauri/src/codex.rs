@@ -1,6 +1,8 @@
 //! A narrow, local stdio client for the official Codex App Server.
-use crate::backends::types::{BackendKind, DEFAULT_CODEX_PROFILE};
+use crate::backends::types::{BackendKind, ConversationBackend, DEFAULT_CODEX_PROFILE};
+mod registry;
 use crate::storage::{Storage, StorageState};
+pub use registry::CodexState;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -48,20 +50,6 @@ const DISABLED_FEATURES: &[&str] = &[
 ];
 
 #[derive(Default)]
-pub struct CodexState {
-    client: Mutex<Option<Arc<Client>>>,
-    connect_gate: AsyncMutex<()>,
-}
-impl CodexState {
-    pub fn shutdown(&self) {
-        if let Ok(slot) = self.client.try_lock()
-            && let Some(client) = slot.as_ref()
-        {
-            client.close("Parley 已关闭。");
-        }
-    }
-}
-#[derive(Default)]
 struct Lane {
     thread: Option<String>,
     signature: String,
@@ -77,6 +65,8 @@ struct Client {
     pending: Mutex<Pending>,
     next_id: AtomicU64,
     alive: AtomicBool,
+    notifications: Mutex<()>,
+    close_reason: Mutex<Option<String>>,
     shutdown: Notify,
     transport_error: Mutex<Option<String>>,
     exited: AtomicBool,
@@ -86,18 +76,28 @@ struct Client {
     lanes: [Mutex<Lane>; 2],
     cwd: PathBuf,
     storage: Storage,
-    profile_revision: i64,
+    profile: ConversationBackend,
 }
 impl Client {
     fn emit(&self, method: &str, params: Value) {
-        let _ = self.events.send(json!({"method":method,"params":params}));
+        let _ = self.events.send(json!({"method":method,"params":params,"profileId":self.profile.profile_id,"profileRevision":self.profile.profile_revision}));
+    }
+    fn closed_error(&self) -> String {
+        self.close_reason
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| "Codex 已断开，请重新连接。".into())
     }
     fn close(&self, reason: &str) {
-        if self.alive.swap(false, Ordering::SeqCst) {
+        let _notifications = self.notifications.lock().unwrap();
+        if self.alive.load(Ordering::SeqCst) {
+            *self.close_reason.lock().unwrap() = Some(reason.to_owned());
+            self.alive.store(false, Ordering::SeqCst);
             for (_, sender) in self.pending.lock().unwrap().drain() {
                 let _ = sender.send(Err(reason.to_owned()));
             }
-            if let Err(e) = self.storage.interrupt_backend(DEFAULT_CODEX_PROFILE) {
+            if let Err(e) = self.storage.interrupt_backend(&self.profile.profile_id) {
                 self.emit("storage/error", json!({"message":e}));
             }
             for lane in &self.lanes {
@@ -145,11 +145,17 @@ impl Client {
         fatal: bool,
     ) -> Reply {
         if !self.alive.load(Ordering::SeqCst) {
-            return Err("Codex 已断开，请重新连接。".into());
+            return Err(self.closed_error());
         }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().unwrap().insert(id, tx);
+        {
+            let mut pending = self.pending.lock().unwrap();
+            if !self.alive.load(Ordering::SeqCst) {
+                return Err(self.closed_error());
+            }
+            pending.insert(id, tx);
+        }
         let mut written = false;
         let result = tokio::time::timeout(timeout, async {
             if let Err(e) = self
@@ -180,6 +186,9 @@ impl Client {
         }
     }
     async fn incoming(&self, value: Value) {
+        if !self.alive.load(Ordering::SeqCst) {
+            return;
+        }
         if let Some(method) = value["method"].as_str() {
             if value.get("id").is_some() {
                 // No client-side tool, approval, credential or elicitation handler is exposed.
@@ -198,6 +207,12 @@ impl Client {
                 );
                 return;
             }
+            // Closing and saving notifications share a gate: buffered stdout
+            // cannot overwrite the interruption recorded by disconnect.
+            let notifications = self.notifications.lock().unwrap();
+            if !self.alive.load(Ordering::SeqCst) {
+                return;
+            }
             let params = &value["params"];
             if let Some(thread) = params["threadId"].as_str() {
                 for (index, lane) in self.lanes.iter().enumerate() {
@@ -209,6 +224,7 @@ impl Client {
                         && let Err(e) = self.storage.event(id, method, params)
                     {
                         drop(lane);
+                        drop(notifications);
                         self.emit("storage/error", json!({"message":e}));
                         self.close("回复保存失败，已停止连接。请检查磁盘空间与数据目录权限。");
                         return;
@@ -253,15 +269,8 @@ impl Client {
         }
     }
 }
-async fn get_client(state: &CodexState) -> Result<Arc<Client>, String> {
-    state
-        .client
-        .lock()
-        .unwrap()
-        .as_ref()
-        .filter(|c| c.alive.load(Ordering::SeqCst))
-        .cloned()
-        .ok_or_else(|| "请先连接 Codex。".into())
+async fn get_client(state: &CodexState, profile_id: Option<&str>) -> Result<Arc<Client>, String> {
+    state.get(profile_id.unwrap_or(DEFAULT_CODEX_PROFILE))
 }
 #[tauri::command]
 pub async fn codex_connect(
@@ -269,40 +278,49 @@ pub async fn codex_connect(
     state: State<'_, CodexState>,
     events: Channel<Value>,
     codex_path: String,
+    profile_id: Option<String>,
+    expected_revision: Option<i64>,
 ) -> Reply {
-    let binary = configured_binary(&codex_path)?;
-    let _connecting = state.connect_gate.lock().await;
-    let old = state.client.lock().unwrap().take();
-    if let Some(old) = old {
-        old.stop().await?;
-    }
-    let cwd = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("conversation-workspace");
-    std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
-    let storage = app.state::<StorageState>().get()?;
-    // Recover any interrupted markers that could not be saved during a disk error.
-    let profile = storage.backend_profile(DEFAULT_CODEX_PROFILE)?;
-    if !profile.config.enabled {
-        return Err("本机 Codex 配置已停用。".into());
-    }
-    if profile.config.binary_path != codex_path.trim() {
-        return Err("Codex 路径与保存的配置不同，请先保存设置再连接。".into());
-    }
-    storage.interrupt_backend(DEFAULT_CODEX_PROFILE)?;
-    let client = launch(binary, cwd, events, storage).await?;
-    *state.client.lock().unwrap() = Some(client.clone());
-    initialize(&client).await
+    let root = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+    registry::connect(
+        &state,
+        app.state::<StorageState>().inner().clone(),
+        root,
+        events,
+        codex_path,
+        profile_id.unwrap_or_else(|| DEFAULT_CODEX_PROFILE.into()),
+        expected_revision,
+    )
+    .await
 }
+#[cfg(test)]
 async fn launch(
     binary: PathBuf,
     cwd: PathBuf,
     events: Channel<Value>,
     storage: Storage,
 ) -> Result<Arc<Client>, String> {
-    let profile_revision = storage.backend_profile(DEFAULT_CODEX_PROFILE)?.revision;
+    let profile = storage.backend_profile(DEFAULT_CODEX_PROFILE)?;
+    launch_profile(
+        binary,
+        cwd,
+        events,
+        storage,
+        ConversationBackend {
+            profile_id: profile.id,
+            profile_revision: profile.revision,
+            kind: BackendKind::Codex,
+        },
+    )
+    .await
+}
+async fn launch_profile(
+    binary: PathBuf,
+    cwd: PathBuf,
+    events: Channel<Value>,
+    storage: Storage,
+    profile: ConversationBackend,
+) -> Result<Arc<Client>, String> {
     let mut version_command = Command::from(crate::launcher::codex_command(&binary));
     version_command
         .arg("--version")
@@ -361,7 +379,7 @@ async fn launch(
     let child = command
         .spawn()
         .map_err(|e| format!("无法启动 Codex：{e}。请在设置中检查你选择的 Codex 可执行文件。"))?;
-    supervise(child, cwd, events, storage, runtime, profile_revision)
+    supervise(child, cwd, events, storage, runtime, profile)
 }
 
 fn supervise(
@@ -370,7 +388,7 @@ fn supervise(
     events: Channel<Value>,
     storage: Storage,
     runtime: String,
-    profile_revision: i64,
+    profile: ConversationBackend,
 ) -> Result<Arc<Client>, String> {
     let stdout = child.stdout.take().ok_or("Codex 输出通道不可用")?;
     let stderr = child.stderr.take().ok_or("Codex 错误通道不可用")?;
@@ -384,6 +402,8 @@ fn supervise(
         pending: Mutex::new(HashMap::new()),
         next_id: AtomicU64::new(1),
         alive: AtomicBool::new(true),
+        notifications: Mutex::new(()),
+        close_reason: Mutex::new(None),
         shutdown: Notify::new(),
         transport_error: Mutex::new(None),
         exited: AtomicBool::new(false),
@@ -393,7 +413,7 @@ fn supervise(
         lanes: Default::default(),
         cwd,
         storage,
-        profile_revision,
+        profile,
     });
     client.emit("connection/notice", json!({"message":runtime}));
     let reader = client.clone();
@@ -563,16 +583,17 @@ async fn initialize(client: &Client) -> Reply {
     result
 }
 #[tauri::command]
-pub async fn codex_disconnect(state: State<'_, CodexState>) -> Reply {
-    let client = state.client.lock().unwrap().take();
-    if let Some(client) = client {
-        client.stop().await?;
-    }
+pub async fn codex_disconnect(state: State<'_, CodexState>, profile_id: Option<String>) -> Reply {
+    state.disconnect(profile_id.as_deref()).await?;
     Ok(Value::Null)
 }
 #[tauri::command]
-pub async fn codex_status(state: State<'_, CodexState>, section: String) -> Reply {
-    let c = get_client(&state).await?;
+pub async fn codex_status(
+    state: State<'_, CodexState>,
+    section: String,
+    profile_id: Option<String>,
+) -> Reply {
+    let c = get_client(&state, profile_id.as_deref()).await?;
     read_status(&c, &section).await
 }
 async fn read_status(c: &Client, section: &str) -> Reply {
@@ -633,22 +654,30 @@ async fn read_status(c: &Client, section: &str) -> Reply {
 }
 
 #[tauri::command]
-pub async fn codex_login(state: State<'_, CodexState>) -> Reply {
-    get_client(&state)
+pub async fn codex_login(state: State<'_, CodexState>, profile_id: Option<String>) -> Reply {
+    get_client(&state, profile_id.as_deref())
         .await?
         .rpc("account/login/start", json!({"type":"chatgpt"}))
         .await
 }
 #[tauri::command]
-pub async fn codex_cancel_login(state: State<'_, CodexState>, login_id: String) -> Reply {
-    get_client(&state)
+pub async fn codex_cancel_login(
+    state: State<'_, CodexState>,
+    login_id: String,
+    profile_id: Option<String>,
+) -> Reply {
+    get_client(&state, profile_id.as_deref())
         .await?
         .rpc("account/login/cancel", json!({"loginId":login_id}))
         .await
 }
 #[tauri::command]
-pub async fn codex_open_login(state: State<'_, CodexState>, url: String) -> Result<(), String> {
-    get_client(&state).await?;
+pub async fn codex_open_login(
+    state: State<'_, CodexState>,
+    url: String,
+    profile_id: Option<String>,
+) -> Result<(), String> {
+    get_client(&state, profile_id.as_deref()).await?;
     let parsed = url::Url::parse(&url).map_err(|_| "无效登录地址")?;
     if parsed.scheme() != "https"
         || parsed.host_str() != Some("auth.openai.com")
@@ -665,12 +694,13 @@ pub async fn codex_terminal_context(
     state: State<'_, CodexState>,
     options: State<'_, crate::launcher::LaunchOptions>,
     thread_id: Option<String>,
+    profile_id: Option<String>,
 ) -> Reply {
     let cwd = options
         .terminal_cwd
         .as_deref()
         .ok_or("请从 parley-cli 启动终端伴随窗口。")?;
-    let c = get_client(&state).await?;
+    let c = get_client(&state, profile_id.as_deref()).await?;
     terminal_context(&c, cwd, thread_id.as_deref()).await
 }
 async fn terminal_context(c: &Client, cwd: &str, thread_id: Option<&str>) -> Reply {
@@ -778,13 +808,17 @@ fn instructions(r: &MessageRequest) -> String {
     }
 }
 #[tauri::command]
-pub async fn codex_send(state: State<'_, CodexState>, request: MessageRequest) -> Reply {
-    let c = get_client(&state).await?;
+pub async fn codex_send(
+    state: State<'_, CodexState>,
+    request: MessageRequest,
+    profile_id: Option<String>,
+) -> Reply {
+    let c = get_client(&state, profile_id.as_deref()).await?;
     send_message(&c, request).await
 }
 async fn send_message(c: &Arc<Client>, request: MessageRequest) -> Reply {
-    let profile = c.storage.backend_profile(DEFAULT_CODEX_PROFILE)?;
-    if !profile.config.enabled || profile.revision != c.profile_revision {
+    let profile = c.storage.backend_profile(&c.profile.profile_id)?;
+    if !profile.config.enabled || profile.revision != c.profile.profile_revision {
         return Err("Codex 服务配置已更改或停用，请重新连接后再发送。".into());
     }
     let index = pane_index(&request.pane)?;
@@ -800,9 +834,11 @@ async fn send_message(c: &Arc<Client>, request: MessageRequest) -> Reply {
     }
     let saved = c.storage.read(&request.conversation_id)?;
     if !saved.backend.as_ref().is_some_and(|binding| {
-        binding.profile_id == DEFAULT_CODEX_PROFILE && binding.kind == BackendKind::Codex
+        binding.profile_id == c.profile.profile_id
+            && binding.kind == BackendKind::Codex
+            && binding.profile_revision == c.profile.profile_revision
     }) {
-        return Err("该会话属于其他模型服务，请选择对应后端或新建对话。".into());
+        return Err("该会话属于其他模型服务或配置版本，请选择对应后端或新建对话。".into());
     }
     if saved.pane != request.pane || request.message_id.is_empty() || request.message_id.len() > 100
     {
@@ -813,10 +849,25 @@ async fn send_message(c: &Arc<Client>, request: MessageRequest) -> Reply {
         request.model, request.target_language, request.native_language, request.mode
     );
     let (thread, generation) = {
+        let _notifications = c.notifications.lock().unwrap();
+        if !c.alive.load(Ordering::SeqCst) {
+            return Err("Codex 已断开，请重新连接。".into());
+        }
         let mut lane = c.lanes[index].lock().unwrap();
         if lane.active {
             return Err("当前面板仍在回复中。".into());
         }
+        c.storage.begin(
+            &request.conversation_id,
+            &request.message_id,
+            &request.text,
+            crate::storage::ConversationConfig {
+                model: &request.model,
+                target: &request.target_language,
+                native: &request.native_language,
+                mode: &request.mode,
+            },
+        )?;
         lane.active = true;
         lane.cancel = false;
         lane.interrupt_sent = false;
@@ -833,7 +884,6 @@ async fn send_message(c: &Arc<Client>, request: MessageRequest) -> Reply {
         (thread, lane.generation)
     };
     let result: Reply = async {
-        c.storage.begin(&request.conversation_id,&request.message_id,&request.text,crate::storage::ConversationConfig {model:&request.model,target:&request.target_language,native:&request.native_language,mode:&request.mode})?;
         let account = c.rpc("account/read", json!({ "refreshToken": false })).await?;
         if account["account"]["type"] != "chatgpt" {
             return Err("请先登录 ChatGPT 账号。".into());
@@ -859,6 +909,8 @@ async fn send_message(c: &Arc<Client>, request: MessageRequest) -> Reply {
                     else {params["ephemeral"]=json!(false);params["environments"]=json!([]);"thread/start"};
                 let response=c.rpc(method,params).await.map_err(|e|if saved.thread_id.is_some() {format!("历史会话恢复失败：{e}。本地记录保留，请重试或新建对话。")} else {e})?;
                 let thread=response["thread"]["id"].as_str().ok_or("Codex 未返回会话 ID")?.to_owned();
+                let _notifications = c.notifications.lock().unwrap();
+                if !c.alive.load(Ordering::SeqCst) { return Err("Codex 已断开，请重新连接。".into()); }
                 c.storage.bind(&request.conversation_id,&thread,email,&signature)?;
                 let mut lane=c.lanes[index].lock().unwrap();
                 lane.thread=Some(thread.clone());lane.signature=signature;
@@ -889,8 +941,9 @@ async fn send_message(c: &Arc<Client>, request: MessageRequest) -> Reply {
         Ok(json!({ "threadId": thread, "turnId": turn }))
     }.await;
     if result.is_err() {
+        let _notifications = c.notifications.lock().unwrap();
         let mut lane = c.lanes[index].lock().unwrap();
-        if lane.generation == generation {
+        if lane.generation == generation && lane.active && c.alive.load(Ordering::SeqCst) {
             let _ = c.storage.fail(&request.conversation_id);
             lane.active = false;
             lane.turn = None;
@@ -899,8 +952,12 @@ async fn send_message(c: &Arc<Client>, request: MessageRequest) -> Reply {
     result
 }
 #[tauri::command]
-pub async fn codex_stop(state: State<'_, CodexState>, pane: String) -> Reply {
-    let c = get_client(&state).await?;
+pub async fn codex_stop(
+    state: State<'_, CodexState>,
+    pane: String,
+    profile_id: Option<String>,
+) -> Reply {
+    let c = get_client(&state, profile_id.as_deref()).await?;
     stop_message(&c, &pane).await
 }
 async fn stop_message(c: &Client, pane: &str) -> Reply {
@@ -923,8 +980,12 @@ async fn stop_message(c: &Client, pane: &str) -> Reply {
     Ok(Value::Null)
 }
 #[tauri::command]
-pub async fn codex_reset(state: State<'_, CodexState>, pane: String) -> Reply {
-    let c = get_client(&state).await?;
+pub async fn codex_reset(
+    state: State<'_, CodexState>,
+    pane: String,
+    profile_id: Option<String>,
+) -> Reply {
+    let c = get_client(&state, profile_id.as_deref()).await?;
     let index = pane_index(&pane)?;
     let mut lane = c.lanes[index].lock().unwrap();
     if lane.active {
@@ -965,7 +1026,7 @@ mod tests {
         s.create("tutor", "tutor").unwrap();
         s
     }
-    fn test_client() -> (Arc<Client>, tokio::io::DuplexStream, Arc<Mutex<Vec<Value>>>) {
+    pub(super) fn test_client() -> (Arc<Client>, tokio::io::DuplexStream, Arc<Mutex<Vec<Value>>>) {
         let (writer, peer) = tokio::io::duplex(4096);
         let captured = Arc::new(Mutex::new(Vec::new()));
         let output = captured.clone();
@@ -984,6 +1045,8 @@ mod tests {
                 pending: Mutex::new(HashMap::new()),
                 next_id: AtomicU64::new(1),
                 alive: AtomicBool::new(true),
+                notifications: Mutex::new(()),
+                close_reason: Mutex::new(None),
                 shutdown: Notify::new(),
                 transport_error: Mutex::new(None),
                 exited: AtomicBool::new(false),
@@ -993,7 +1056,11 @@ mod tests {
                 lanes: Default::default(),
                 cwd: std::env::temp_dir(),
                 storage: test_storage(),
-                profile_revision: 1,
+                profile: ConversationBackend {
+                    profile_id: DEFAULT_CODEX_PROFILE.into(),
+                    profile_revision: 1,
+                    kind: BackendKind::Codex,
+                },
             }),
             peer,
             captured,
@@ -1031,7 +1098,11 @@ mod tests {
             events,
             test_storage(),
             "实际 CLI：codex-cli 0.145.0\n执行文件：/fixture/codex".into(),
-            1,
+            ConversationBackend {
+                profile_id: DEFAULT_CODEX_PROFILE.into(),
+                profile_revision: 1,
+                kind: BackendKind::Codex,
+            },
         )
         .unwrap();
         (client, captured)

@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { useCodexStore, type Conversation } from './store'
 import { useBackendStore } from '../backends/store'
 import type { TurnEvent } from '../backends/types'
+import { useCodexConnectionsStore } from './connections'
 import { useSettingsStore } from '../settings/store'
 const mock = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -623,5 +624,171 @@ describe('API conversation routing', () => {
       requestId: request.messageId,
     })
     expect(mock.invoke.mock.calls.some((c) => c[0] === 'codex_stop')).toBe(false)
+  })
+})
+
+describe('multiple Codex profiles', () => {
+  async function setup() {
+    const store = useCodexStore()
+    await store.initializeWorkspace()
+    const backends = useBackendStore()
+    backends.profiles = ['codex-a', 'codex-b'].map((id) => ({
+      id,
+      revision: 2,
+      config: {
+        name: id,
+        kind: 'codex',
+        provider: 'openai',
+        endpoint: '',
+        binaryPath: `/bin/${id}`,
+        enabled: true,
+      },
+    }))
+    const connections = useCodexConnectionsStore()
+    await store.connectCodexProfile('codex-a')
+    await store.connectCodexProfile('codex-b')
+    store.lanes.main.backend = { profileId: 'codex-a', profileRevision: 2, kind: 'codex' }
+    store.lanes.tutor.backend = { profileId: 'codex-b', profileRevision: 2, kind: 'codex' }
+    store.mainModel = 'main-model'
+    store.tutorModel = 'gpt-5.6-luna'
+    return { store, backends, connections }
+  }
+  it('routes simultaneous sends and overlapping item IDs by profile and disconnects only that profile', async () => {
+    const { store, connections } = await setup()
+    expect(await store.send('main', 'Hello')).toBe(true)
+    expect(await store.send('tutor', 'Explain')).toBe(true)
+    expect(mock.invoke).toHaveBeenCalledWith(
+      'codex_send',
+      expect.objectContaining({
+        profileId: 'codex-a',
+        request: expect.objectContaining({ pane: 'main' }),
+      }),
+    )
+    expect(mock.invoke).toHaveBeenCalledWith(
+      'codex_send',
+      expect.objectContaining({
+        profileId: 'codex-b',
+        request: expect.objectContaining({ pane: 'tutor' }),
+      }),
+    )
+    emit(
+      'item/agentMessage/delta',
+      { pane: 'main', conversationId: 'main', itemId: 'same', delta: 'Main answer' },
+      0,
+    )
+    emit(
+      'item/agentMessage/delta',
+      { pane: 'tutor', conversationId: 'tutor', itemId: 'same', delta: 'Tutor answer' },
+      1,
+    )
+    emit(
+      'item/agentMessage/delta',
+      { pane: 'tutor', conversationId: 'tutor', itemId: 'same', delta: 'Wrong profile' },
+      0,
+    )
+    expect(store.lanes.main.messages.at(-1)?.text).toBe('Main answer')
+    expect(store.lanes.tutor.messages.at(-1)?.text).toBe('Tutor answer')
+    await connections.get('codex-a').disconnect()
+    expect(mock.invoke).toHaveBeenCalledWith('codex_disconnect', { profileId: 'codex-a' })
+    expect(store.lanes.main.busy).toBe(false)
+    expect(store.lanes.main.messages.at(-1)?.status).toBe('interrupted')
+    expect(store.lanes.tutor.busy).toBe(true)
+    emit('item/completed', { pane: 'main', item: { id: 'same', text: 'Late answer' } }, 0)
+    expect(store.lanes.main.messages.at(-1)?.text).toBe('Main answer')
+    emit('item/agentMessage/delta', { pane: 'tutor', itemId: 'same', delta: ' continues' }, 1)
+    expect(store.lanes.tutor.messages.at(-1)?.text).toBe('Tutor answer continues')
+    await store.stop('tutor')
+    expect(mock.invoke).toHaveBeenCalledWith('codex_stop', { pane: 'tutor', profileId: 'codex-b' })
+  })
+  it('ignores the wrong profile or revision and requires reconnect after editing settings', async () => {
+    const { store, backends } = await setup()
+    for (const envelope of [
+      { profileId: 'codex-b', profileRevision: 2 },
+      { profileId: 'codex-a', profileRevision: 1 },
+    ]) {
+      mock.callbacks[0]!.onmessage({
+        ...envelope,
+        method: 'item/agentMessage/delta',
+        params: { pane: 'main', itemId: 'wrong', delta: 'Wrong' },
+      })
+    }
+    expect(store.lanes.main.messages).toEqual([])
+    backends.profiles[0]!.revision = 3
+    expect(store.isReady('main')).toBe(false)
+    expect(store.isReady('tutor')).toBe(true)
+    expect(await store.send('main', 'Do not send')).toBe(false)
+    expect(mock.invoke).not.toHaveBeenCalledWith('codex_send', expect.anything())
+  })
+  it('scopes account, model, limits and login operations to the selected configuration', async () => {
+    const { connections } = await setup()
+    for (const section of ['account', 'models', 'limits']) {
+      expect(mock.invoke).toHaveBeenCalledWith('codex_status', { section, profileId: 'codex-b' })
+    }
+    mock.invoke.mockImplementation(async (method, args) => {
+      if (method === 'codex_status') return { account: null, models: [], limits: null }
+      if (method === 'codex_login')
+        return { loginId: 'login-b', authUrl: 'https://auth.openai.com/authorize' }
+      return defaultInvoke(method, args)
+    })
+    const b = connections.get('codex-b')
+    await b.signIn()
+    expect(mock.invoke).toHaveBeenCalledWith('codex_login', { profileId: 'codex-b' })
+    expect(mock.invoke).toHaveBeenCalledWith('codex_open_login', {
+      profileId: 'codex-b',
+      url: 'https://auth.openai.com/authorize',
+    })
+    await b.cancelLogin()
+    expect(mock.invoke).toHaveBeenCalledWith('codex_cancel_login', {
+      profileId: 'codex-b',
+      loginId: 'login-b',
+    })
+    expect(connections.get('codex-a').ready).toBe(true)
+  })
+  it('an old login cancellation cannot clear a newer login after reconnect', async () => {
+    const { connections } = await setup()
+    const connection = connections.get('codex-b')
+    connection.login = { loginId: 'old-login', authUrl: 'https://auth.openai.com/authorize' }
+    connection.loggingIn = true
+    let finish!: () => void
+    mock.invoke.mockImplementation((method, args) =>
+      method === 'codex_cancel_login'
+        ? new Promise<void>((resolve) => {
+            finish = resolve
+          })
+        : Promise.resolve(defaultInvoke(method, args)),
+    )
+    const cancelled = connection.cancelLogin()
+    await connection.disconnect()
+    await connection.connect('/bin/codex-b', 2)
+    connection.login = { loginId: 'new-login', authUrl: 'https://auth.openai.com/authorize' }
+    connection.loggingIn = true
+    finish()
+    await cancelled
+    expect(connection.login?.loginId).toBe('new-login')
+    expect(connection.loggingIn).toBe(true)
+  })
+  it('cancel during initialization invalidates both its result and old channel before reconnecting', async () => {
+    let finish!: (value: unknown) => void
+    mock.invoke.mockImplementation((method, args) =>
+      method === 'codex_connect'
+        ? new Promise((resolve) => {
+            finish = resolve
+          })
+        : Promise.resolve(defaultInvoke(method, args)),
+    )
+    const connection = useCodexConnectionsStore().get('codex-a')
+    const pending = connection.connect('/bin/codex-a', 2)
+    expect(connection.connecting).toBe(true)
+    await connection.disconnect()
+    finish({ profileRevision: 2 })
+    await pending
+    expect(connection.connected).toBe(false)
+    expect(connection.connecting).toBe(false)
+    expect(mock.invoke).not.toHaveBeenCalledWith('codex_status', expect.anything())
+    mock.invoke.mockImplementation(async (method, args) => defaultInvoke(method, args))
+    await connection.connect('/bin/codex-a', 2)
+    emit('connection/closed', { message: 'Old connection exited' }, 0)
+    expect(connection.ready).toBe(true)
+    expect(connection.error).toBe('')
   })
 })
