@@ -1,31 +1,43 @@
-import { computed, reactive, ref, watch, onScopeDispose } from 'vue'
+import { computed, reactive, ref, watch, onScopeDispose, toRefs } from 'vue'
 import { defineStore, storeToRefs } from 'pinia'
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { isDesktop } from '../../shared/desktop'
 import { useSettingsStore } from '../settings/store'
+import { useWorkspaceStore } from '../workspace/store'
 import { useBackendStore } from '../backends/store'
 import type { TurnEvent } from '../backends/types'
 
 import { useCodexConnectionsStore } from '../codex/connections'
 import { useCodexConnectionStore, type ServerEvent } from '../codex/connection'
-import type { Pane, VocabularyAnswerTarget, Lane, Conversation, Workspace } from './types'
+import type { Pane, VocabularyAnswerTarget, Lane } from './types'
 export type { Pane, Message, Conversation, VocabularyAnswerTarget } from './types'
 
-const emptyLane = (): Lane => ({
-  id: '',
-  draft: '',
-  title: '新的对话',
-  messages: [],
-  busy: false,
-  error: '',
-  signature: '',
-  request: 0,
-  backend: { profileId: 'codex-default', profileRevision: 1, kind: 'codex' },
-})
 const describe = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 export const useChatStore = defineStore('chat', () => {
   const settings = useSettingsStore()
+  const workspace = useWorkspaceStore()
+  const {
+    codexPath,
+    mainModel,
+    tutorModel,
+    initialized,
+    loading,
+    storageError,
+    dbPath,
+    history,
+    tutorMode,
+    activeView,
+    mobilePane,
+    saving,
+    closing,
+    ready: workspaceReady,
+  } = storeToRefs(workspace)
+  const { flush, refreshHistory, scheduleSave, adopt, create } = workspace
+  function makeLane(pane: Pane) {
+    return reactive({ ...toRefs(workspace.documents[pane]), busy: false, error: '', request: 0 })
+  }
+  const lanes = reactive<Record<Pane, Lane>>({ main: makeLane('main'), tutor: makeLane('tutor') })
   const backends = useBackendStore()
   const connection = useCodexConnectionStore()
   const codexConnections = useCodexConnectionsStore()
@@ -47,19 +59,7 @@ export const useChatStore = defineStore('chat', () => {
     label,
   } = storeToRefs(connection)
   const { disconnect, signIn, openLogin, cancelLogin } = connection
-  const codexPath = ref('')
   const terminalContext = ref('')
-  const mainModel = ref('')
-  const tutorModel = ref('')
-  const lanes = reactive<Record<Pane, Lane>>({ main: emptyLane(), tutor: emptyLane() })
-  const initialized = ref(false)
-  const loading = ref(false)
-  const storageError = ref('')
-  const dbPath = ref('')
-  const history = ref<Conversation[]>([])
-  const tutorMode = ref('express')
-  const activeView = ref<'conversation' | 'vocabulary'>('conversation')
-  const mobilePane = ref<Pane>('main')
   const navigating = ref(false)
   const navigationError = ref('')
   const sourceFocus = ref<{
@@ -69,9 +69,30 @@ export const useChatStore = defineStore('chat', () => {
     request: number
   } | null>(null)
   let sourceFocusRequest = 0
-  const saving = ref(false)
-  const closing = ref(false)
-  const workspaceReady = computed(() => initialized.value && !storageError.value && !closing.value)
+  for (const pane of ['main', 'tutor'] as const) {
+    watch(
+      () => workspace.selectionVersion[pane],
+      () => {
+        if (sourceFocus.value?.pane === pane) sourceFocus.value = null
+        const lane = lanes[pane]
+        const status = workspace.documents[pane].status
+        Object.assign(lane, {
+          busy: false,
+          request: lane.request + 1,
+          error:
+            status === 'interrupted'
+              ? '上次回复已中断，已保存的内容可继续查看。'
+              : status === 'failed'
+                ? '上次请求未完成，可查看记录或重新提问。'
+                : '',
+          apiRequestId: undefined,
+          notice: undefined,
+          vocabularyTarget: undefined,
+        })
+      },
+      { flush: 'sync', immediate: true },
+    )
+  }
   function isReady(pane: Pane) {
     if (!workspaceReady.value || navigating.value) return false
     const binding = lanes[pane].backend
@@ -102,182 +123,21 @@ export const useChatStore = defineStore('chat', () => {
     return `${name} · ${status}`
   }
   const ready = computed(() => isReady('main') || isReady('tutor'))
-  let applying = false
-  let dirty = false
-  let savingTask: Promise<boolean> | null = null
-  let loadingTask: Promise<void> | null = null
-  let historyRequest = 0
-  function snapshot() {
-    return {
-      preferences: {
-        codexPath: codexPath.value,
-        nativeLanguage: settings.nativeLanguage,
-        targetLanguage: settings.targetLanguage,
-        mainModel: mainModel.value,
-        tutorModel: tutorModel.value,
-        mainId: lanes.main.id || null,
-        tutorId: lanes.tutor.id || null,
-        tutorMode: tutorMode.value,
-        activeView: activeView.value,
-        mobilePane: mobilePane.value,
-      },
-      drafts: Object.values(lanes)
-        .filter((lane) => lane.id)
-        .map((lane) => ({ id: lane.id, text: lane.draft })),
-    }
-  }
-  function scheduleSave() {
-    if (!initialized.value || applying || !isDesktop()) return
-    dirty = true
-    if (!storageError.value) void flush()
-  }
-  async function flush(): Promise<boolean> {
-    if (!isDesktop()) return true
-    if (!initialized.value) return false
-    if (savingTask) {
-      const result = await savingTask
-      return dirty && result ? flush() : result
-    }
-    savingTask = (async () => {
-      saving.value = true
-      try {
-        while (dirty) {
-          dirty = false
-          try {
-            await invoke('storage_save', snapshot())
-            storageError.value = ''
-          } catch (e) {
-            dirty = true
-            storageError.value = describe(e)
-            return false
-          }
-        }
-        return true
-      } finally {
-        saving.value = false
-      }
-    })()
-    const result = await savingTask
-    savingTask = null
-    return dirty && result ? flush() : result
-  }
-  watch(
-    () => [
-      codexPath.value,
-      settings.nativeLanguage,
-      settings.targetLanguage,
-      mainModel.value,
-      tutorModel.value,
-      tutorMode.value,
-      activeView.value,
-      mobilePane.value,
-      lanes.main.id,
-      lanes.main.draft,
-      lanes.tutor.id,
-      lanes.tutor.draft,
-    ],
-    scheduleSave,
-    { flush: 'sync' },
-  )
-  function adopt(pane: Pane, conversation: Conversation, restoreSettings = false) {
-    applying = true
-    if (sourceFocus.value?.pane === pane) sourceFocus.value = null
-    Object.assign(lanes[pane], emptyLane(), {
-      id: conversation.id,
-      title: conversation.title,
-      draft: conversation.draft,
-      messages: conversation.messages,
-      signature: conversation.signature,
-      backend: conversation.backend ?? emptyLane().backend,
-      request: lanes[pane].request + 1,
-      error:
-        conversation.status === 'interrupted'
-          ? '上次回复已中断，已保存的内容可继续查看。'
-          : conversation.status === 'failed'
-            ? '上次请求未完成，可查看记录或重新提问。'
-            : '',
-    })
-    if (restoreSettings && conversation.model) {
-      settings.nativeLanguage = conversation.nativeLanguage
-      settings.targetLanguage = conversation.targetLanguage
-      if (pane === 'main') mainModel.value = conversation.model
-      else {
-        tutorModel.value = conversation.model
-        tutorMode.value = conversation.mode
-      }
-    }
-    applying = false
-    scheduleSave()
-  }
-  async function create(pane: Pane, profileId = lanes[pane].backend.profileId) {
-    const id = crypto.randomUUID()
-    if (!isDesktop())
-      return {
-        id,
-        pane,
-        title: '新的对话',
-        model: '',
-        targetLanguage: settings.targetLanguage,
-        nativeLanguage: settings.nativeLanguage,
-        mode: pane === 'main' ? 'conversation' : tutorMode.value,
-        draft: '',
-        threadId: null,
-        signature: '',
-        status: 'idle',
-        updatedAt: Date.now(),
-        messages: [],
-      } satisfies Conversation
-    return invoke<Conversation>('storage_create', { id, pane, profileId })
-  }
+  let bootstrapped = false
+  let bootstrap: Promise<void> | null = null
   async function initializeWorkspace() {
-    if (initialized.value) return
-    if (loadingTask) return loadingTask
-    loadingTask = (async () => {
-      loading.value = true
-      try {
-        if (isDesktop()) {
-          const workspace = await invoke<Workspace>('storage_load')
-          applying = true
-          codexPath.value = workspace.preferences.codexPath ?? ''
-          settings.nativeLanguage = workspace.preferences.nativeLanguage
-          settings.targetLanguage = workspace.preferences.targetLanguage
-          mainModel.value = workspace.preferences.mainModel
-          tutorModel.value = workspace.preferences.tutorModel
-          tutorMode.value = workspace.preferences.tutorMode
-          activeView.value = workspace.preferences.activeView
-          mobilePane.value = workspace.preferences.mobilePane
-          dbPath.value = workspace.path
-          history.value = workspace.history
-          applying = false
-          adopt('main', workspace.main ?? (await create('main')))
-          adopt('tutor', workspace.tutor ?? (await create('tutor')))
-        } else {
-          adopt('main', await create('main'))
-          adopt('tutor', await create('tutor'))
-        }
-        initialized.value = true
-        await backends.load()
-        storageError.value = ''
-        scheduleSave()
-        await flush()
-      } catch (e) {
-        storageError.value = describe(e)
-      } finally {
-        applying = false
-        loading.value = false
-      }
+    if (bootstrapped && initialized.value) return
+    if (bootstrap) return bootstrap
+    bootstrap = (async () => {
+      await workspace.initialize()
+      if (!initialized.value) return
+      await backends.load()
+      bootstrapped = true
     })()
-    await loadingTask
-    loadingTask = null
-  }
-  async function refreshHistory() {
-    if (!isDesktop() || !initialized.value) return
     try {
-      const request = ++historyRequest
-      const result = await invoke<Conversation[]>('storage_list')
-      if (request === historyRequest) history.value = result
-    } catch (e) {
-      storageError.value = describe(e)
+      await bootstrap
+    } finally {
+      bootstrap = null
     }
   }
   async function selectConversation(id: string, messageId?: string): Promise<boolean> {
@@ -291,7 +151,7 @@ export const useChatStore = defineStore('chat', () => {
     navigating.value = true
     try {
       if (!(await flush())) return false
-      const conversation = await invoke<Conversation>('storage_read', { id })
+      const conversation = await workspace.read(id)
       if (conversation.id !== id || !['main', 'tutor'].includes(conversation.pane))
         throw new Error('无法确认原会话，原句快照仍可查看。')
       if (messageId && !conversation.messages.some((message) => message.id === messageId))
@@ -326,7 +186,7 @@ export const useChatStore = defineStore('chat', () => {
       if (!(await flush())) return
       if (lanes[entry.pane].id === id) await resetLane(entry.pane)
       if (lanes[entry.pane].id === id) return
-      await invoke('storage_delete', { id })
+      await workspace.remove(id)
       await refreshHistory()
     } catch (e) {
       storageError.value = describe(e)
@@ -336,10 +196,7 @@ export const useChatStore = defineStore('chat', () => {
   }
   async function retryStorage() {
     if (!initialized.value) await initializeWorkspace()
-    else {
-      dirty = true
-      await flush()
-    }
+    else await workspace.retryStorage()
   }
   function chooseDefaultModels() {
     for (const pane of ['main', 'tutor'] as const) {

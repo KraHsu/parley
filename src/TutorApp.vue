@@ -34,13 +34,13 @@ function showWords(tab: string) {
   view.value = 'vocabulary'
 }
 const dialog = ref<HTMLDialogElement>()
-const { codex, closeError, attemptClose } = useWorkspaceWindow(
+const { codex, workspace, closeError, attemptClose } = useWorkspaceWindow(
   () => dialog.value?.close(),
   async () => {
-    if (props.initialCodexPath) codex.codexPath = props.initialCodexPath
+    if (props.initialCodexPath) workspace.codexPath = props.initialCodexPath
     const needsSource = !!props.terminalCwd && props.terminalBackend !== 'claude-code'
     if (isDesktop()) {
-      if (needsSource && codex.codexPath) await codex.connect()
+      if (needsSource && workspace.codexPath) await codex.connect()
       const tutor = codex.lanes.tutor.backend
       if (tutor.kind === 'codex' && !(needsSource && tutor.profileId === 'codex-default'))
         await codex.connectCodexProfile(tutor.profileId)
@@ -69,9 +69,9 @@ const assistantLabel = computed(() => codex.paneLabel('tutor'))
         设置 · {{ assistantLabel }}
       </button>
     </header>
-    <div v-if="codex.loading || codex.storageError" class="storage-banner" role="status">
-      {{ codex.loading ? '正在恢复学习记录…' : codex.storageError }}
-      <button v-if="codex.storageError" class="text-button" @click="codex.retryStorage">
+    <div v-if="workspace.loading || workspace.storageError" class="storage-banner" role="status">
+      {{ workspace.loading ? '正在恢复学习记录…' : workspace.storageError }}
+      <button v-if="workspace.storageError" class="text-button" @click="codex.retryStorage">
         重试
       </button>
     </div>
@@ -79,17 +79,17 @@ const assistantLabel = computed(() => codex.paneLabel('tutor'))
       {{ codex.error }}
       <button class="text-button" @click="dialog?.showModal()">打开连接设置</button>
     </div>
-    <div v-if="codex.closing" class="storage-banner" role="status">正在保存并关闭…</div>
+    <div v-if="workspace.closing" class="storage-banner" role="status">正在保存并关闭…</div>
     <div v-if="codex.navigationError" class="storage-banner" role="alert">
       {{ codex.navigationError }}
       <button class="text-button" @click="codex.navigationError = ''">关闭提示</button>
     </div>
     <div v-if="closeError" class="storage-banner" role="alert">
       {{ closeError }}
-      <button class="text-button" :disabled="codex.closing" @click="attemptClose()">
+      <button class="text-button" :disabled="workspace.closing" @click="attemptClose()">
         重试关闭
       </button>
-      <button class="text-button" :disabled="codex.closing" @click="attemptClose(true)">
+      <button class="text-button" :disabled="workspace.closing" @click="attemptClose(true)">
         强制关闭并放弃未保存修改
       </button>
     </div>
@@ -159,12 +159,12 @@ const assistantLabel = computed(() => codex.paneLabel('tutor'))
           <LanguagePicker
             v-model="settings.nativeLanguage"
             label="母语"
-            :disabled="!codex.initialized || codex.closing"
+            :disabled="!workspace.initialized || workspace.closing"
           />
           <LanguagePicker
             v-model="settings.targetLanguage"
             label="目标语言"
-            :disabled="!codex.initialized || codex.closing"
+            :disabled="!workspace.initialized || workspace.closing"
           />
           <p class="settings-help">
             这些设置用于语法助手。终端对话由官方 CLI

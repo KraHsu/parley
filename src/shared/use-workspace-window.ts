@@ -1,6 +1,7 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { useWorkspaceStore } from '../features/workspace/store'
 import { useChatStore } from '../features/chat/store'
 import { isDesktop } from './desktop'
 import { closeWorkspace } from './window-close'
@@ -8,15 +9,16 @@ import { useVocabularyStore } from '../features/vocabulary/store'
 import { settleWordOperations } from './word-operations'
 
 export function useWorkspaceWindow(beforeClose: () => void, afterLoad?: () => Promise<void>) {
+  const workspace = useWorkspaceStore()
   const codex = useChatStore()
   const vocabulary = useVocabularyStore()
   const closeError = ref('')
   let unlisten: (() => void) | undefined
   let disposed = false
   async function attemptClose(discard = false) {
-    if (codex.closing) return
+    if (workspace.closing) return
     beforeClose()
-    codex.closing = true
+    workspace.closing = true
     closeError.value = ''
     try {
       await closeWorkspace(
@@ -24,7 +26,7 @@ export function useWorkspaceWindow(beforeClose: () => void, afterLoad?: () => Pr
           save: async () => {
             const wordsSaved = await vocabulary.flush()
             await settleWordOperations()
-            const chatSaved = codex.initialized ? await codex.flush() : true
+            const chatSaved = workspace.initialized ? await workspace.flush() : true
             return wordsSaved && chatSaved
           },
           disconnect: async () => {
@@ -42,7 +44,7 @@ export function useWorkspaceWindow(beforeClose: () => void, afterLoad?: () => Pr
     } catch (error) {
       closeError.value = error instanceof Error ? error.message : String(error)
     } finally {
-      codex.closing = false
+      workspace.closing = false
     }
   }
   onMounted(async () => {
@@ -56,13 +58,15 @@ export function useWorkspaceWindow(beforeClose: () => void, afterLoad?: () => Pr
         return
       }
     }
+    await workspace.initialize()
+    if (workspace.initialized) await vocabulary.initialize()
+    if (disposed || workspace.closing) return
     await codex.initializeWorkspace()
-    if (codex.initialized) await vocabulary.initialize()
-    if (!disposed && !codex.closing && codex.initialized) await afterLoad?.()
+    if (!disposed && !workspace.closing && workspace.initialized) await afterLoad?.()
   })
   onUnmounted(() => {
     disposed = true
     unlisten?.()
   })
-  return { codex, closeError, attemptClose }
+  return { codex, workspace, closeError, attemptClose }
 }
