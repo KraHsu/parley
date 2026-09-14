@@ -698,7 +698,7 @@ mod tests {
             legacy
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            4
+            5
         );
         assert_eq!(
             legacy

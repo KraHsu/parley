@@ -8,6 +8,7 @@ export interface Message {
   role: 'user' | 'assistant' | 'note'
   text: string
   status?: 'pending' | 'streaming' | 'complete' | 'interrupted' | 'failed'
+  usage?: Record<string, unknown>
   vocabularyTarget?: VocabularyAnswerTarget
 }
 export interface Conversation {
@@ -55,5 +56,7 @@ export interface Lane {
   signature: string
   request: number
   backend: NonNullable<Conversation['backend']>
+  apiRequestId?: string
+  notice?: string
   vocabularyTarget?: VocabularyAnswerTarget
 }

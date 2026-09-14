@@ -30,7 +30,7 @@ watch(
       :class="`message-${message.role}`"
     >
       <span class="message-author">{{
-        message.role === 'user' ? '你' : message.role === 'assistant' ? 'GPT' : '新会话'
+        message.role === 'user' ? '你' : message.role === 'assistant' ? '助手' : '新会话'
       }}</span>
       <StudyText
         v-if="message.role !== 'note'"
@@ -56,6 +56,9 @@ watch(
         >{{ message.status === 'interrupted' ? '已中断 · 内容可能不完整' : '请求未完成' }}</small
       >
     </article>
+    <p v-if="codex.lanes[pane].notice" class="settings-help" role="status">
+      {{ codex.lanes[pane].notice }}
+    </p>
     <p v-if="busy" class="stream-status" role="status"><span class="tiny-dot" />正在回复…</p>
   </div>
 </template>

@@ -1,4 +1,8 @@
 //! Public backend configuration. Credentials belong to a separate secret store.
+pub mod credentials;
+pub mod http;
+pub mod manager;
+pub mod sse;
 pub mod types;
 
 use crate::storage::StorageState;

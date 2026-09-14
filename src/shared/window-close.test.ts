@@ -30,7 +30,7 @@ describe('closing the workspace', () => {
     vi.useFakeTimers()
     const a = actions()
     a.disconnect.mockImplementation(() => new Promise(() => {}))
-    const failed = expect(closeWorkspace(a)).rejects.toThrow('Codex 未能及时退出')
+    const failed = expect(closeWorkspace(a)).rejects.toThrow('模型后端未能及时退出')
     await vi.advanceTimersByTimeAsync(12000)
     await failed
     expect(a.destroy).not.toHaveBeenCalled()

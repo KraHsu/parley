@@ -1,7 +1,7 @@
 use super::*;
 use crate::backends::types::{BackendProfile, DEFAULT_CODEX_PROFILE, SaveProfile};
-use rusqlite::Transaction;
 
+#[cfg(test)]
 fn profile_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BackendProfile> {
     let config: String = row.get(2)?;
     Ok(BackendProfile {
@@ -13,196 +13,247 @@ fn profile_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BackendProfile> {
     })
 }
 
-fn write_version(tx: &Transaction<'_>, profile: &BackendProfile) -> Result<()> {
-    let config = serde_json::to_string(&profile.config).map_err(error)?;
-    tx.execute(
-        "UPDATE backend_profiles SET revision=?1,config=?2,updated_at=?3 WHERE id=?4",
-        params![profile.revision, config, now(), profile.id],
-    )
-    .map_err(error)?;
-    tx.execute(
-        "INSERT INTO backend_profile_versions VALUES(?1,?2,?3)",
-        params![profile.id, profile.revision, config],
-    )
-    .map_err(error)?;
-    Ok(())
-}
-
-pub(super) fn sync_codex_path(tx: &Transaction<'_>, path: &str) -> Result<()> {
+pub(super) fn sync_codex_path(
+    db: &mut diesel::SqliteConnection,
+    path: &str,
+) -> super::typed::DbResult<()> {
+    use super::schema::{backend_profile_versions as v, backend_profiles as p};
+    use diesel::prelude::*;
     let path = path.trim();
-    let mut profile = tx
-        .query_row(
-            "SELECT id,revision,config FROM backend_profiles WHERE id=?1",
-            [DEFAULT_CODEX_PROFILE],
-            profile_row,
-        )
-        .map_err(error)?;
+    let mut profile = typed_profile(db, DEFAULT_CODEX_PROFILE)?;
     if profile.config.binary_path != path {
-        ensure_inactive(tx, &profile.id)?;
+        typed_inactive(db, &profile.id)?;
         profile.config.binary_path = path.to_owned();
         profile.config.validate()?;
         profile.revision += 1;
-        write_version(tx, &profile)?;
+        let config = serde_json::to_string(&profile.config).map_err(error)?;
+        diesel::update(p::table.find(&profile.id))
+            .set((
+                p::revision.eq(profile.revision),
+                p::config.eq(&config),
+                p::updated_at.eq(now()),
+            ))
+            .execute(db)?;
+        diesel::insert_into(v::table)
+            .values((
+                v::profile_id.eq(&profile.id),
+                v::revision.eq(profile.revision),
+                v::config.eq(config),
+            ))
+            .execute(db)?;
     }
     Ok(())
 }
 
-fn ensure_inactive(tx: &Transaction<'_>, id: &str) -> Result<()> {
-    let running: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM conversation_backends b JOIN conversations c ON c.id=b.conversation_id WHERE b.profile_id=?1 AND c.status='running')",
-        [id], |r| r.get(0),
-    ).map_err(error)?;
+#[derive(diesel::Queryable, diesel::Selectable)]
+#[diesel(table_name = super::schema::backend_profiles)]
+struct ProfileRecord {
+    id: String,
+    revision: i64,
+    config: String,
+}
+impl TryFrom<ProfileRecord> for BackendProfile {
+    type Error = super::typed::DbError;
+    fn try_from(row: ProfileRecord) -> std::result::Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.id,
+            revision: row.revision,
+            config: serde_json::from_str(&row.config).map_err(error)?,
+        })
+    }
+}
+pub(super) fn typed_profile(
+    db: &mut diesel::SqliteConnection,
+    profile_id: &str,
+) -> super::typed::DbResult<BackendProfile> {
+    use super::schema::backend_profiles as p;
+    use diesel::prelude::*;
+    p::table
+        .find(profile_id)
+        .select(ProfileRecord::as_select())
+        .first::<ProfileRecord>(db)?
+        .try_into()
+}
+fn typed_inactive(db: &mut diesel::SqliteConnection, id: &str) -> super::typed::DbResult<()> {
+    use super::schema::{conversation_backends as b, conversations as c};
+    use diesel::prelude::*;
+    let running = diesel::select(diesel::dsl::exists(
+        c::table
+            .inner_join(b::table.on(b::conversation_id.eq(c::id)))
+            .filter(b::profile_id.eq(id))
+            .filter(c::status.eq("running")),
+    ))
+    .get_result::<bool>(db)?;
     if running {
         return Err("该服务仍在回复，请先停止生成再修改配置。".into());
     }
     Ok(())
 }
-
 impl Storage {
     pub fn backend_profiles(&self) -> Result<Vec<BackendProfile>> {
-        let db = self.db.lock().unwrap();
-        let mut query = db
-            .prepare("SELECT id,revision,config FROM backend_profiles ORDER BY created_at,id")
-            .map_err(error)?;
-        query
-            .query_map([], profile_row)
-            .map_err(error)?
-            .collect::<rusqlite::Result<_>>()
-            .map_err(error)
+        use super::schema::backend_profiles as p;
+        use diesel::prelude::*;
+        self.typed(|db| {
+            p::table
+                .order((p::created_at, p::id))
+                .select(ProfileRecord::as_select())
+                .load::<ProfileRecord>(db)?
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect()
+        })
     }
-
     pub fn backend_profile(&self, id: &str) -> Result<BackendProfile> {
-        self.db
-            .lock()
-            .unwrap()
-            .query_row(
-                "SELECT id,revision,config FROM backend_profiles WHERE id=?1",
-                [id],
-                profile_row,
-            )
-            .map_err(error)
+        self.typed(|db| typed_profile(db, id))
     }
-
     pub fn save_backend_profile(&self, mut request: SaveProfile) -> Result<BackendProfile> {
+        use super::schema::{
+            backend_profile_versions as v, backend_profiles as p, preferences as pref,
+        };
+        use diesel::prelude::*;
         request.config.validate()?;
-        let mut db = self.db.lock().unwrap();
-        let tx = db.transaction().map_err(error)?;
-        let profile = if let Some(id) = request.id {
-            let old = tx
-                .query_row(
-                    "SELECT id,revision,config FROM backend_profiles WHERE id=?1",
-                    [&id],
-                    profile_row,
-                )
-                .map_err(error)?;
-            if request.expected_revision != Some(old.revision) {
-                return Err("服务配置已被更新，请重新读取后再保存。".into());
-            }
-            // Identity is immutable. Create another profile to change protocol/vendor.
-            if old.config.kind != request.config.kind
-                || old.config.provider != request.config.provider
-            {
-                return Err("更换厂商或协议请创建新的服务配置。".into());
-            }
-            if old.config == request.config {
-                return Ok(old);
-            }
-            ensure_inactive(&tx, &id)?;
-            let profile = BackendProfile {
-                id,
-                revision: old.revision + 1,
-                config: request.config,
-            };
-            write_version(&tx, &profile)?;
-            profile
-        } else {
-            if request.expected_revision.is_some() {
-                return Err("新服务不能指定已有配置版本。".into());
-            }
-            let profile = BackendProfile {
-                id: uuid::Uuid::new_v4().to_string(),
-                revision: 1,
-                config: request.config,
+        self.typed_transaction(|db| {
+            let is_new = request.id.is_none();
+            let profile = if let Some(id) = request.id {
+                let old = typed_profile(db, &id)?;
+                if request.expected_revision != Some(old.revision) {
+                    return Err("服务配置已被更新，请重新读取后再保存。".into());
+                }
+                if old.config.kind != request.config.kind
+                    || old.config.provider != request.config.provider
+                {
+                    return Err("更换厂商或协议请创建新的服务配置。".into());
+                }
+                if old.config == request.config {
+                    return Ok(old);
+                }
+                typed_inactive(db, &id)?;
+                BackendProfile {
+                    id,
+                    revision: old.revision + 1,
+                    config: request.config,
+                }
+            } else {
+                if request.expected_revision.is_some() {
+                    return Err("新服务不能指定已有配置版本。".into());
+                }
+                BackendProfile {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    revision: 1,
+                    config: request.config,
+                }
             };
             let config = serde_json::to_string(&profile.config).map_err(error)?;
-            tx.execute(
-                "INSERT INTO backend_profiles VALUES(?1,1,?2,?3,?3)",
-                params![profile.id, config, now()],
-            )
-            .map_err(error)?;
-            tx.execute(
-                "INSERT INTO backend_profile_versions VALUES(?1,1,?2)",
-                params![profile.id, config],
-            )
-            .map_err(error)?;
-            profile
-        };
-        if profile.id == DEFAULT_CODEX_PROFILE {
-            let saved: Option<String> = tx
-                .query_row("SELECT value FROM preferences WHERE id=1", [], |r| r.get(0))
-                .optional()
-                .map_err(error)?;
-            let mut preferences: Value = saved
-                .map(|s| serde_json::from_str(&s).map_err(error))
-                .transpose()?
-                .unwrap_or_else(|| serde_json::json!({}));
-            preferences["codexPath"] = Value::String(profile.config.binary_path.clone());
-            tx.execute("INSERT INTO preferences VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET value=excluded.value", [preferences.to_string()]).map_err(error)?;
-        }
-        tx.commit().map_err(error)?;
-        Ok(profile)
+            if is_new {
+                diesel::insert_into(p::table)
+                    .values((
+                        p::id.eq(&profile.id),
+                        p::revision.eq(profile.revision),
+                        p::config.eq(&config),
+                        p::created_at.eq(now()),
+                        p::updated_at.eq(now()),
+                    ))
+                    .execute(db)?;
+            } else {
+                diesel::update(p::table.find(&profile.id))
+                    .set((
+                        p::revision.eq(profile.revision),
+                        p::config.eq(&config),
+                        p::updated_at.eq(now()),
+                    ))
+                    .execute(db)?;
+            }
+            diesel::insert_into(v::table)
+                .values((
+                    v::profile_id.eq(&profile.id),
+                    v::revision.eq(profile.revision),
+                    v::config.eq(config),
+                ))
+                .execute(db)?;
+            if profile.id == DEFAULT_CODEX_PROFILE {
+                let saved: Option<String> = pref::table
+                    .find(1_i64)
+                    .select(pref::value)
+                    .first(db)
+                    .optional()?;
+                let mut preferences: Value = saved
+                    .map(|s| serde_json::from_str(&s).map_err(error))
+                    .transpose()?
+                    .unwrap_or_else(|| serde_json::json!({}));
+                preferences["codexPath"] = Value::String(profile.config.binary_path.clone());
+                let serialized = preferences.to_string();
+                diesel::insert_into(pref::table)
+                    .values((pref::id.eq(1_i64), pref::value.eq(&serialized)))
+                    .on_conflict(pref::id)
+                    .do_update()
+                    .set(pref::value.eq(&serialized))
+                    .execute(db)?;
+            }
+            Ok(profile)
+        })
     }
-
     pub fn interrupt_backend(&self, profile: &str) -> Result<()> {
-        let mut db = self.db.lock().unwrap();
-        let tx = db.transaction().map_err(error)?;
-        tx.execute("UPDATE conversations SET status='interrupted' WHERE status='running' AND id IN (SELECT conversation_id FROM conversation_backends WHERE profile_id=?1)", [profile]).map_err(error)?;
-        tx.execute("UPDATE messages SET status='interrupted' WHERE status IN ('streaming','pending') AND conversation_id IN (SELECT conversation_id FROM conversation_backends WHERE profile_id=?1)", [profile]).map_err(error)?;
-        tx.commit().map_err(error)
+        use super::schema::{conversation_backends as b, conversations as c, messages as m};
+        use diesel::prelude::*;
+        self.typed_transaction(|db| {
+            let ids = b::table
+                .filter(b::profile_id.eq(profile))
+                .select(b::conversation_id);
+            diesel::update(
+                c::table
+                    .filter(c::id.eq_any(ids))
+                    .filter(c::status.eq("running")),
+            )
+            .set(c::status.eq("interrupted"))
+            .execute(db)?;
+            diesel::update(
+                m::table
+                    .filter(m::conversation_id.eq_any(ids))
+                    .filter(m::status.eq_any(["streaming", "pending"])),
+            )
+            .set(m::status.eq("interrupted"))
+            .execute(db)?;
+            Ok(())
+        })
     }
-
     pub fn create_for_backend(
         &self,
         id: &str,
         pane: &str,
         profile_id: &str,
     ) -> Result<Conversation> {
+        use super::schema::{conversation_backends as b, conversations as c};
+        use diesel::prelude::*;
         if id.is_empty() || id.len() > 100 || !["main", "tutor"].contains(&pane) {
             return Err("会话标识无效。".into());
         }
-        let mut db = self.db.lock().unwrap();
-        let tx = db.transaction().map_err(error)?;
-        let profile = tx
-            .query_row(
-                "SELECT id,revision,config FROM backend_profiles WHERE id=?1",
-                [profile_id],
-                profile_row,
-            )
-            .map_err(error)?;
-        if !profile.config.enabled {
-            return Err("该模型服务已停用。".into());
-        }
-        tx.execute(
-            "INSERT INTO conversations(id,pane,mode,created_at,updated_at) VALUES(?1,?2,?3,?4,?4)",
-            params![
-                id,
-                pane,
-                if pane == "main" {
-                    "conversation"
-                } else {
-                    "express"
-                },
-                now()
-            ],
-        )
-        .map_err(error)?;
-        tx.execute(
-            "INSERT INTO conversation_backends VALUES(?1,?2,?3)",
-            params![id, profile_id, profile.revision],
-        )
-        .map_err(error)?;
-        tx.commit().map_err(error)?;
-        drop(db);
+        self.typed_transaction(|db| {
+            let profile = typed_profile(db, profile_id)?;
+            if !profile.config.enabled {
+                return Err("该模型服务已停用。".into());
+            }
+            diesel::insert_into(c::table)
+                .values((
+                    c::id.eq(id),
+                    c::pane.eq(pane),
+                    c::mode.eq(if pane == "main" {
+                        "conversation"
+                    } else {
+                        "express"
+                    }),
+                    c::created_at.eq(now()),
+                    c::updated_at.eq(now()),
+                ))
+                .execute(db)?;
+            diesel::insert_into(b::table)
+                .values((
+                    b::conversation_id.eq(id),
+                    b::profile_id.eq(profile_id),
+                    b::profile_revision.eq(profile.revision),
+                ))
+                .execute(db)?;
+            Ok(())
+        })?;
         self.read(id)
     }
 }
@@ -214,11 +265,17 @@ mod tests {
 
     #[test]
     fn upgrade_creates_a_readable_pre_migration_backup() {
+        for version in [3, 4] {
+            check_upgrade_backup(version);
+        }
+    }
+
+    fn check_upgrade_backup(version: usize) {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("parley.sqlite3");
         {
             let db = Connection::open(&path).unwrap();
-            for migration in &super::super::MIGRATIONS[..3] {
+            for migration in &super::super::MIGRATIONS[..version] {
                 db.execute_batch(migration).unwrap();
             }
             db.execute_batch("PRAGMA journal_mode=WAL; INSERT INTO preferences VALUES(1,'{\"targetLanguage\":\"ja\"}');").unwrap();
@@ -232,7 +289,7 @@ mod tests {
                 p.file_name()
                     .unwrap()
                     .to_string_lossy()
-                    .starts_with("parley-before-v4-")
+                    .starts_with("parley-before-v5-")
             })
             .collect();
         assert_eq!(backups.len(), 1);
@@ -243,7 +300,7 @@ mod tests {
             backup
                 .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
                 .unwrap(),
-            3
+            version as i64
         );
         assert_eq!(
             backup

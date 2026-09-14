@@ -21,7 +21,8 @@ function duration(minutes: number | null) {
       Codex 连接 <span class="subtle-label">{{ codex.label }}</span>
     </h3>
     <p class="settings-help">
-      连接时自动读取本机 Codex 已有的登录状态。两处对话使用你的 ChatGPT 账号及其 Codex 额度。
+      连接时自动读取本机 Codex 已有的登录状态。选用 Codex 的对话使用你的 ChatGPT 账号及其 Codex
+      额度。
     </p>
     <label class="settings-field codex-path-field">
       Codex 可执行文件路径
@@ -88,7 +89,9 @@ function duration(minutes: number | null) {
     <p v-if="codex.notice" class="settings-help" role="status">{{ codex.notice }}</p>
     <p v-if="codex.limitsError" class="settings-help" role="status">{{ codex.limitsError }}</p>
     <template v-if="codex.account?.type === 'chatgpt' && codex.models.length">
-      <label v-if="!tutorOnly" class="settings-field"
+      <label
+        v-if="!tutorOnly && codex.lanes.main.backend.profileId === 'codex-default'"
+        class="settings-field"
         >对话模型<select v-model="codex.mainModel" :disabled="codex.lanes.main.busy">
           <option
             v-if="codex.mainModel && !codex.models.some((m) => m.model === codex.mainModel)"
@@ -102,7 +105,7 @@ function duration(minutes: number | null) {
           </option>
         </select></label
       >
-      <label class="settings-field"
+      <label v-if="codex.lanes.tutor.backend.profileId === 'codex-default'" class="settings-field"
         >辅导模型<select v-model="codex.tutorModel" :disabled="codex.lanes.tutor.busy">
           <option
             v-if="codex.tutorModel && !codex.models.some((m) => m.model === codex.tutorModel)"

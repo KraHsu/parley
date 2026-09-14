@@ -1,9 +1,13 @@
+pub mod api;
 pub mod backends;
 pub mod exchange;
 pub mod review;
+mod schema;
+mod typed;
 pub mod vocabulary;
+mod workspace;
 use crate::backends::types::{ConversationBackend, DEFAULT_CODEX_PROFILE};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -19,8 +23,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/002_vocabulary.sql"),
     include_str!("../migrations/003_vocabulary_review.sql"),
     include_str!("../migrations/004_model_backends.sql"),
+    include_str!("../migrations/005_api_turns.sql"),
 ];
-const CONVERSATION_SELECT: &str = "SELECT c.id,c.pane,c.title,c.model,c.target_language,c.native_language,c.mode,c.draft,c.thread_id,c.account,c.signature,c.status,c.updated_at,b.profile_id,b.profile_revision,json_extract(v.config,'$.kind') FROM conversations c LEFT JOIN conversation_backends b ON b.conversation_id=c.id LEFT JOIN backend_profile_versions v ON v.profile_id=b.profile_id AND v.revision=b.profile_revision";
 
 pub struct StorageState {
     path: std::result::Result<PathBuf, String>,
@@ -51,6 +55,7 @@ type Result<T> = std::result::Result<T, String>;
 #[derive(Clone)]
 pub struct Storage {
     db: Arc<Mutex<Connection>>,
+    typed_db: Arc<Mutex<diesel::SqliteConnection>>,
     path: PathBuf,
     _lock: Option<Arc<File>>,
 }
@@ -157,42 +162,6 @@ pub struct ConversationConfig<'a> {
     pub native: &'a str,
     pub mode: &'a str,
 }
-fn conversation_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Conversation> {
-    let profile: Option<String> = r.get(13)?;
-    let backend = profile
-        .map(|profile_id| {
-            let kind: String = r.get(15)?;
-            Ok::<_, rusqlite::Error>(ConversationBackend {
-                profile_id,
-                profile_revision: r.get(14)?,
-                kind: serde_json::from_value(Value::String(kind)).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        15,
-                        rusqlite::types::Type::Text,
-                        Box::new(e),
-                    )
-                })?,
-            })
-        })
-        .transpose()?;
-    Ok(Conversation {
-        id: r.get(0)?,
-        pane: r.get(1)?,
-        title: r.get(2)?,
-        model: r.get(3)?,
-        target_language: r.get(4)?,
-        native_language: r.get(5)?,
-        mode: r.get(6)?,
-        draft: r.get(7)?,
-        thread_id: r.get(8)?,
-        account: r.get(9)?,
-        signature: r.get(10)?,
-        status: r.get(11)?,
-        updated_at: r.get(12)?,
-        messages: Vec::new(),
-        backend,
-    })
-}
 impl Storage {
     pub fn open(path: &Path) -> Result<Self> {
         let lock = if path != Path::new(":memory:") {
@@ -209,7 +178,17 @@ impl Storage {
         } else {
             None
         };
-        let mut db = Connection::open(path).map_err(error)?;
+        let database_url = if path == Path::new(":memory:") {
+            format!(
+                "file:parley-{}?mode=memory&cache=shared",
+                uuid::Uuid::new_v4()
+            )
+        } else {
+            path.to_str()
+                .ok_or("数据目录路径不是有效 UTF-8。")?
+                .to_owned()
+        };
+        let mut db = Connection::open(&database_url).map_err(error)?;
         db.busy_timeout(Duration::from_secs(3)).map_err(error)?;
         let version: i64 = db
             .pragma_query_value(None, "user_version", |r| r.get(0))
@@ -234,6 +213,7 @@ impl Storage {
         .map_err(error)?;
         let storage = Self {
             db: Arc::new(Mutex::new(db)),
+            typed_db: Arc::new(Mutex::new(typed::connect(&database_url)?)),
             path: path.to_owned(),
             _lock: lock,
         };
@@ -243,241 +223,6 @@ impl Storage {
     #[cfg(test)]
     pub fn memory() -> Self {
         Self::open(Path::new(":memory:")).unwrap()
-    }
-    pub fn interrupt_all(&self) -> Result<()> {
-        let mut db = self.db.lock().unwrap();
-        let tx = db.transaction().map_err(error)?;
-        tx.execute(
-            "UPDATE conversations SET status='interrupted' WHERE status='running'",
-            [],
-        )
-        .map_err(error)?;
-        tx.execute(
-            "UPDATE messages SET status='interrupted' WHERE status IN ('streaming','pending')",
-            [],
-        )
-        .map_err(error)?;
-        tx.commit().map_err(error)
-    }
-    pub fn preferences(&self) -> Result<Preferences> {
-        let db = self.db.lock().unwrap();
-        let value: Option<String> = db
-            .query_row("SELECT value FROM preferences WHERE id=1", [], |r| r.get(0))
-            .optional()
-            .map_err(error)?;
-        value
-            .map(|s| serde_json::from_str(&s).map_err(error))
-            .unwrap_or_else(|| Ok(Preferences::default()))
-    }
-    pub fn save(&self, p: &Preferences, drafts: &[Draft]) -> Result<()> {
-        if p.target_language.is_empty()
-            || p.native_language.is_empty()
-            || p.target_language.len() > 100
-            || p.native_language.len() > 100
-            || p.main_model.len() > 200
-            || p.tutor_model.len() > 200
-        {
-            return Err("语言或模型设置无效。".into());
-        }
-        if !["express", "explain", "translate"].contains(&p.tutor_mode.as_str())
-            || !["conversation", "vocabulary"].contains(&p.active_view.as_str())
-            || !["main", "tutor"].contains(&p.mobile_pane.as_str())
-        {
-            return Err("工作区设置无效。".into());
-        }
-        let mut db = self.db.lock().unwrap();
-        let tx = db.transaction().map_err(error)?;
-        for (id, pane) in [(&p.main_id, "main"), (&p.tutor_id, "tutor")] {
-            if let Some(id) = id {
-                let exists: bool = tx
-                    .query_row(
-                        "SELECT EXISTS(SELECT 1 FROM conversations WHERE id=?1 AND pane=?2)",
-                        params![id, pane],
-                        |r| r.get(0),
-                    )
-                    .map_err(error)?;
-                if !exists {
-                    return Err("所选会话不存在。".into());
-                }
-            }
-        }
-        backends::sync_codex_path(&tx, &p.codex_path)?;
-        tx.execute("INSERT INTO preferences VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET value=excluded.value",[serde_json::to_string(p).map_err(error)?]).map_err(error)?;
-        for draft in drafts {
-            if draft.text.len() > 128000 {
-                return Err("草稿不能超过 128 KB。".into());
-            }
-            if tx
-                .execute(
-                    "UPDATE conversations SET draft=?1 WHERE id=?2",
-                    params![draft.text, draft.id],
-                )
-                .map_err(error)?
-                != 1
-            {
-                return Err("草稿所属会话不存在。".into());
-            }
-        }
-        tx.commit().map_err(error)
-    }
-    pub fn create(&self, id: &str, pane: &str) -> Result<Conversation> {
-        self.create_for_backend(id, pane, DEFAULT_CODEX_PROFILE)
-    }
-    pub fn list(&self) -> Result<Vec<Conversation>> {
-        let db = self.db.lock().unwrap();
-        let mut query = db
-            .prepare(&format!(
-                "{CONVERSATION_SELECT} ORDER BY c.updated_at DESC,c.rowid DESC"
-            ))
-            .map_err(error)?;
-        query
-            .query_map([], conversation_row)
-            .map_err(error)?
-            .collect::<rusqlite::Result<_>>()
-            .map_err(error)
-    }
-    fn read_metadata(&self, id: &str) -> Result<Conversation> {
-        self.db
-            .lock()
-            .unwrap()
-            .query_row(
-                &format!("{CONVERSATION_SELECT} WHERE c.id=?1"),
-                [id],
-                conversation_row,
-            )
-            .map_err(error)
-    }
-    pub fn read(&self, id: &str) -> Result<Conversation> {
-        let mut c = self.read_metadata(id)?;
-        let db = self.db.lock().unwrap();
-        let mut q=db.prepare("SELECT id,role,text,status FROM messages WHERE conversation_id=?1 ORDER BY sequence").map_err(error)?;
-        c.messages = q
-            .query_map([id], |r| {
-                Ok(Message {
-                    id: r.get(0)?,
-                    role: r.get(1)?,
-                    text: r.get(2)?,
-                    status: r.get(3)?,
-                })
-            })
-            .map_err(error)?
-            .collect::<rusqlite::Result<_>>()
-            .map_err(error)?;
-        Ok(c)
-    }
-    pub fn bind(
-        &self,
-        id: &str,
-        thread: &str,
-        account: Option<&str>,
-        signature: &str,
-    ) -> Result<()> {
-        self.db
-            .lock()
-            .unwrap()
-            .execute(
-                "UPDATE conversations SET thread_id=?1,account=?2,signature=?3 WHERE id=?4",
-                params![thread, account, signature, id],
-            )
-            .map_err(error)?;
-        Ok(())
-    }
-    pub fn begin(
-        &self,
-        id: &str,
-        message_id: &str,
-        text: &str,
-        config: ConversationConfig<'_>,
-    ) -> Result<()> {
-        let ConversationConfig {
-            model,
-            target,
-            native,
-            mode,
-        } = config;
-        let mut db = self.db.lock().unwrap();
-        let tx = db.transaction().map_err(error)?;
-        if tx.execute("UPDATE conversations SET status='running',title=CASE WHEN title='新的对话' THEN ?1 ELSE title END,model=?2,target_language=?3,native_language=?4,mode=?5,draft='',updated_at=?6 WHERE id=?7 AND status!='running'",params![text.chars().take(36).collect::<String>(),model,target,native,mode,now(),id]).map_err(error)?!=1 { return Err("会话不存在或仍在回复中。".into()); }
-        // A request ID cannot be submitted twice, including after a crash.
-        tx.execute("INSERT INTO messages(id,conversation_id,role,text,status) VALUES(?1,?2,'user',?3,'pending')",params![message_id,id,text]).map_err(error)?;
-        tx.commit().map_err(error)
-    }
-    pub fn event(&self, id: &str, method: &str, p: &Value) -> Result<()> {
-        let mut db = self.db.lock().unwrap();
-        let tx = db.transaction().map_err(error)?;
-        match method {
-            "item/agentMessage/delta" => {
-                if let (Some(item), Some(delta)) = (p["itemId"].as_str(), p["delta"].as_str()) {
-                    tx.execute("INSERT INTO messages(id,conversation_id,role,text,status,turn_id) VALUES(?1,?2,'assistant',?3,'streaming',?4) ON CONFLICT(conversation_id,id) DO UPDATE SET text=messages.text||excluded.text WHERE messages.status='streaming'",params![item,id,delta,p["turnId"].as_str()]).map_err(error)?;
-                }
-            }
-            "item/completed" if p["item"]["type"] == "agentMessage" => {
-                if let (Some(item), Some(text)) =
-                    (p["item"]["id"].as_str(), p["item"]["text"].as_str())
-                {
-                    tx.execute("INSERT INTO messages(id,conversation_id,role,text,status,turn_id) VALUES(?1,?2,'assistant',?3,'complete',?4) ON CONFLICT(conversation_id,id) DO UPDATE SET text=excluded.text,status='complete'",params![item,id,text,p["turnId"].as_str()]).map_err(error)?;
-                }
-            }
-            "turn/started" => {
-                tx.execute("UPDATE messages SET status='complete' WHERE conversation_id=?1 AND role='user' AND status='pending'",[id]).map_err(error)?;
-            }
-            "turn/completed" => {
-                let status = match p["turn"]["status"].as_str() {
-                    Some("completed") => "idle",
-                    Some("interrupted") => "interrupted",
-                    _ => "failed",
-                };
-                tx.execute(
-                    "UPDATE conversations SET status=?1,updated_at=?2 WHERE id=?3",
-                    params![status, now(), id],
-                )
-                .map_err(error)?;
-                tx.execute("UPDATE messages SET status=?1 WHERE conversation_id=?2 AND status IN ('streaming','pending')",params![if status=="idle" {"complete"} else {status},id]).map_err(error)?;
-            }
-            _ => {}
-        }
-        tx.commit().map_err(error)
-    }
-    pub fn fail(&self, id: &str) -> Result<()> {
-        self.event(
-            id,
-            "turn/completed",
-            &serde_json::json!({"turn":{"status":"failed"}}),
-        )
-    }
-    pub fn delete(&self, id: &str) -> Result<()> {
-        let mut db = self.db.lock().unwrap();
-        let tx = db.transaction().map_err(error)?;
-        if tx
-            .query_row("SELECT status FROM conversations WHERE id=?1", [id], |r| {
-                r.get::<_, String>(0)
-            })
-            .map_err(error)?
-            == "running"
-        {
-            return Err("请先停止当前回复。".into());
-        }
-        tx.execute("DELETE FROM conversations WHERE id=?1", [id])
-            .map_err(error)?;
-        let saved: Option<String> = tx
-            .query_row("SELECT value FROM preferences WHERE id=1", [], |r| r.get(0))
-            .optional()
-            .map_err(error)?;
-        if let Some(saved) = saved {
-            let mut p: Preferences = serde_json::from_str(&saved).map_err(error)?;
-            if p.main_id.as_deref() == Some(id) {
-                p.main_id = None;
-            }
-            if p.tutor_id.as_deref() == Some(id) {
-                p.tutor_id = None;
-            }
-            tx.execute(
-                "UPDATE preferences SET value=?1 WHERE id=1",
-                [serde_json::to_string(&p).map_err(error)?],
-            )
-            .map_err(error)?;
-        }
-        tx.commit().map_err(error)
     }
     pub fn load(&self) -> Result<Workspace> {
         let p = self.preferences()?;
@@ -715,3 +460,6 @@ mod tests {
         assert!(second.get().is_ok());
     }
 }
+
+#[cfg(test)]
+pub(crate) mod api_tests;

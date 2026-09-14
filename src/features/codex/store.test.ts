@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useCodexStore, type Conversation } from './store'
+import { useBackendStore } from '../backends/store'
+import type { TurnEvent } from '../backends/types'
 import { useSettingsStore } from '../settings/store'
 const mock = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -431,5 +433,78 @@ describe('Codex workspace', () => {
     expect(store.lanes.main.id).toBe('older')
     expect(store.lanes.main.draft).toBe('old draft')
     expect(store.lanes.main.messages[0]?.text).toBe('prior conversation')
+  })
+})
+
+describe('API conversation routing', () => {
+  async function setup() {
+    const store = useCodexStore()
+    await store.connect()
+    const backends = useBackendStore()
+    backends.profiles = [
+      {
+        id: 'api',
+        revision: 1,
+        config: {
+          name: 'Fixture API',
+          kind: 'openai_responses',
+          provider: 'openai',
+          endpoint: 'https://api.example.invalid/v1',
+          binaryPath: '',
+          enabled: true,
+        },
+      },
+    ]
+    backends.state('api').credential = { configured: true, persistence: 'session' }
+    store.lanes.main.backend = { profileId: 'api', profileRevision: 1, kind: 'openai_responses' }
+    store.mainModel = 'manual-api-model'
+    return store
+  }
+  it('isolates concurrent Codex and API replies and ignores stale projections', async () => {
+    const store = await setup()
+    await Promise.all([store.send('main', 'Hello API'), store.send('tutor', 'Explain hello')])
+    const call = mock.invoke.mock.calls.find((c) => c[0] === 'backend_send')![1]
+    const event: TurnEvent = {
+      profileId: 'api',
+      profileRevision: 1,
+      conversationId: 'main',
+      pane: 'main',
+      turnId: 'turn-api',
+      requestId: call.request.messageId,
+      messageId: 'api-answer',
+      sequence: 2,
+      status: 'streaming',
+      text: 'API answer',
+      usage: null,
+      error: null,
+      notice: null,
+    }
+    call.events.onmessage(event)
+    call.events.onmessage({ ...event, sequence: 1, text: 'stale' })
+    call.events.onmessage({ ...event, sequence: 3, conversationId: 'other', text: 'wrong' })
+    emit('item/agentMessage/delta', {
+      pane: 'tutor',
+      conversationId: 'tutor',
+      itemId: 'codex-answer',
+      delta: 'Codex answer',
+    })
+    expect(store.lanes.main.messages.at(-1)?.text).toBe('API answer')
+    expect(store.lanes.tutor.messages.at(-1)?.text).toBe('Codex answer')
+    call.events.onmessage({ ...event, sequence: 3, status: 'complete', text: 'API final' })
+    call.events.onmessage({ ...event, sequence: 4, text: 'late delta' })
+    expect(store.lanes.main.messages.at(-1)?.text).toBe('API final')
+    expect(store.lanes.main.busy).toBe(false)
+    expect(store.lanes.tutor.busy).toBe(true)
+  })
+  it('stops the exact API request without stopping the Codex process', async () => {
+    const store = await setup()
+    await store.send('main', 'Hello API')
+    const request = mock.invoke.mock.calls.find((c) => c[0] === 'backend_send')![1].request
+    await store.stop('main')
+    expect(mock.invoke).toHaveBeenCalledWith('backend_stop', {
+      conversationId: 'main',
+      requestId: request.messageId,
+    })
+    expect(mock.invoke.mock.calls.some((c) => c[0] === 'codex_stop')).toBe(false)
   })
 })

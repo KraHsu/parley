@@ -14,6 +14,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(options)
         .manage(codex::CodexState::default())
+        .manage(backends::manager::BackendState::default())
         .manage(exchange::ImportState::default())
         .setup(|app| {
             if app.state::<launcher::LaunchOptions>().tutor_only {
@@ -36,6 +37,13 @@ pub fn run() {
             commands::get_runtime_info,
             backends::backend_profiles,
             backends::backend_save_profile,
+            backends::manager::backend_credential_status,
+            backends::manager::backend_set_credential,
+            backends::manager::backend_remove_credential,
+            backends::manager::backend_models,
+            backends::manager::backend_send,
+            backends::manager::backend_stop,
+            backends::manager::backend_disconnect,
             launcher::get_launch_options,
             codex::codex_connect,
             codex::codex_disconnect,
@@ -77,6 +85,7 @@ pub fn run() {
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
                 app.state::<codex::CodexState>().shutdown();
+                app.state::<backends::manager::BackendState>().shutdown();
             }
         });
 }

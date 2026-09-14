@@ -1,8 +1,10 @@
 import { computed, reactive, ref, watch, onScopeDispose } from 'vue'
 import { defineStore, storeToRefs } from 'pinia'
-import { invoke } from '@tauri-apps/api/core'
+import { Channel, invoke } from '@tauri-apps/api/core'
 import { isDesktop } from '../../shared/desktop'
 import { useSettingsStore } from '../settings/store'
+import { useBackendStore } from '../backends/store'
+import type { TurnEvent } from '../backends/types'
 
 import { useCodexConnectionStore, type ServerEvent } from '../codex/connection'
 import type { Pane, VocabularyAnswerTarget, Lane, Conversation, Workspace } from './types'
@@ -23,6 +25,7 @@ const describe = (error: unknown) => (error instanceof Error ? error.message : S
 
 export const useChatStore = defineStore('chat', () => {
   const settings = useSettingsStore()
+  const backends = useBackendStore()
   const connection = useCodexConnectionStore()
   const {
     connected,
@@ -57,18 +60,15 @@ export const useChatStore = defineStore('chat', () => {
   const mobilePane = ref<Pane>('main')
   const saving = ref(false)
   const closing = ref(false)
-  const ready = computed(
-    () =>
-      connected.value &&
-      account.value?.type === 'chatgpt' &&
-      models.value.length > 0 &&
-      initialized.value &&
-      !storageError.value &&
-      !closing.value,
-  )
+  const workspaceReady = computed(() => initialized.value && !storageError.value && !closing.value)
   function isReady(pane: Pane) {
-    return ready.value && lanes[pane].backend.profileId === 'codex-default'
+    if (!workspaceReady.value) return false
+    const binding = lanes[pane].backend
+    return binding.profileId === 'codex-default'
+      ? connection.ready
+      : backends.isReady(binding.profileId, binding.profileRevision)
   }
+  const ready = computed(() => isReady('main') || isReady('tutor'))
   let applying = false
   let dirty = false
   let savingTask: Promise<boolean> | null = null
@@ -175,7 +175,7 @@ export const useChatStore = defineStore('chat', () => {
     applying = false
     scheduleSave()
   }
-  async function create(pane: Pane) {
+  async function create(pane: Pane, profileId = lanes[pane].backend.profileId) {
     const id = crypto.randomUUID()
     if (!isDesktop())
       return {
@@ -193,7 +193,7 @@ export const useChatStore = defineStore('chat', () => {
         updatedAt: Date.now(),
         messages: [],
       } satisfies Conversation
-    return invoke<Conversation>('storage_create', { id, pane })
+    return invoke<Conversation>('storage_create', { id, pane, profileId })
   }
   async function initializeWorkspace() {
     if (initialized.value) return
@@ -222,6 +222,7 @@ export const useChatStore = defineStore('chat', () => {
           adopt('tutor', await create('tutor'))
         }
         initialized.value = true
+        await backends.load()
         storageError.value = ''
         scheduleSave()
         await flush()
@@ -279,8 +280,9 @@ export const useChatStore = defineStore('chat', () => {
   function chooseDefaultModels() {
     const available = models.value
     const fallback = available.find((m) => m.isDefault)?.model ?? available[0]?.model ?? ''
-    if (!mainModel.value) mainModel.value = fallback
-    if (!tutorModel.value)
+    if (lanes.main.backend.profileId === 'codex-default' && !mainModel.value)
+      mainModel.value = fallback
+    if (lanes.tutor.backend.profileId === 'codex-default' && !tutorModel.value)
       tutorModel.value = available.find((m) => m.model.includes('luna'))?.model ?? fallback
   }
   watch(models, chooseDefaultModels, { flush: 'sync' })
@@ -369,8 +371,15 @@ export const useChatStore = defineStore('chat', () => {
     const model = pane === 'main' ? mainModel.value : tutorModel.value
     const answerSnapshot = vocabularyTarget ? { ...vocabularyTarget } : undefined
     const terminalSnapshot = pane === 'tutor' ? terminalContext.value || null : null
+    const targetLanguage = settings.targetLanguage
+    const nativeLanguage = settings.nativeLanguage
+    const initialId = lane.id
+    const initialBackend = { ...lane.backend }
     if (!isReady(pane) || lane.busy || !text.trim() || !model) return false
-    if (!models.value.some((m) => m.model === model)) {
+    if (
+      lane.backend.profileId === 'codex-default' &&
+      !models.value.some((m) => m.model === model)
+    ) {
       lane.error = '当前账号不再提供已保存的模型，请在设置中选择可用模型。'
       return false
     }
@@ -378,8 +387,16 @@ export const useChatStore = defineStore('chat', () => {
       lane.error = '消息不能超过 32 KB。'
       return false
     }
-    if (!(await flush()) || lane.busy) return false
-    const signature = [model, settings.targetLanguage, settings.nativeLanguage, mode].join('|')
+    if (
+      !(await flush()) ||
+      lane.busy ||
+      lane.id !== initialId ||
+      lane.backend.profileId !== initialBackend.profileId ||
+      lane.backend.profileRevision !== initialBackend.profileRevision ||
+      !isReady(pane)
+    )
+      return false
+    const signature = [model, targetLanguage, nativeLanguage, mode].join('|')
     if (lane.signature && lane.signature !== signature) {
       const draft = lane.draft
       await reset(pane)
@@ -391,25 +408,79 @@ export const useChatStore = defineStore('chat', () => {
     lane.vocabularyTarget = answerSnapshot
     lane.signature = signature
     lane.error = ''
+    lane.notice = undefined
     lane.busy = true
     const request = ++lane.request
     const messageId = crypto.randomUUID()
     const conversationId = lane.id
+    const backend = { ...lane.backend }
+    lane.apiRequestId = messageId
     lane.messages.push({ id: messageId, role: 'user', text: text.trim(), status: 'pending' })
     try {
-      await invoke('codex_send', {
-        request: {
-          pane,
-          conversationId,
-          messageId,
-          text: text.trim(),
-          model,
-          targetLanguage: settings.targetLanguage,
-          nativeLanguage: settings.nativeLanguage,
-          terminalContext: terminalSnapshot,
-          mode,
-        },
-      })
+      const payload = {
+        pane,
+        conversationId,
+        messageId,
+        text: text.trim(),
+        model,
+        targetLanguage,
+        nativeLanguage,
+        terminalContext: terminalSnapshot,
+        mode,
+      }
+      if (backend.profileId === 'codex-default') await invoke('codex_send', { request: payload })
+      else {
+        let sequence = 0
+        let finished = false
+        const events = new Channel<TurnEvent>()
+        events.onmessage = (event) => {
+          if (
+            finished ||
+            request !== lane.request ||
+            lane.id !== conversationId ||
+            event.pane !== pane ||
+            event.conversationId !== conversationId ||
+            event.requestId !== messageId ||
+            event.profileId !== backend.profileId ||
+            event.profileRevision !== backend.profileRevision ||
+            event.sequence <= sequence
+          )
+            return
+          sequence = event.sequence
+          let answer = lane.messages.find((m) => m.id === event.messageId)
+          if (!answer) {
+            lane.messages.push({
+              id: event.messageId,
+              role: 'assistant',
+              text: '',
+              status: 'streaming',
+              vocabularyTarget: answerSnapshot,
+            })
+            answer = lane.messages.at(-1)!
+          }
+          answer.text = event.text
+          answer.status = event.status
+          answer.usage = event.usage ?? undefined
+          const user = lane.messages.find((m) => m.id === messageId)
+          if (user) user.status = 'complete'
+          if (event.error) lane.error = event.error
+          if (event.notice) lane.notice = event.notice
+          if (event.status !== 'streaming') {
+            finished = true
+            lane.busy = false
+            lane.apiRequestId = undefined
+            void refreshHistory()
+          }
+        }
+        await invoke('backend_send', {
+          request: {
+            ...payload,
+            profileId: backend.profileId,
+            profileRevision: backend.profileRevision,
+          },
+          events,
+        })
+      }
       if (request === lane.request && lane.draft === text) lane.draft = ''
       await flush()
       await refreshHistory()
@@ -418,6 +489,7 @@ export const useChatStore = defineStore('chat', () => {
       if (request === lane.request) {
         lane.error = describe(e)
         lane.busy = false
+        lane.apiRequestId = undefined
         const message = lane.messages.find((m) => m.id === messageId)
         if (message) message.status = 'failed'
         // Keep the draft for an explicit retry. Never resend automatically.
@@ -430,7 +502,13 @@ export const useChatStore = defineStore('chat', () => {
   }
   async function stop(pane: Pane) {
     try {
-      await invoke('codex_stop', { pane })
+      const lane = lanes[pane]
+      if (lane.backend.profileId === 'codex-default') await invoke('codex_stop', { pane })
+      else
+        await invoke('backend_stop', {
+          conversationId: lane.id,
+          requestId: lane.apiRequestId ?? null,
+        })
     } catch (e) {
       lanes[pane].error = describe(e)
     }
@@ -438,12 +516,41 @@ export const useChatStore = defineStore('chat', () => {
   async function reset(pane: Pane) {
     if (lanes[pane].busy || !initialized.value || !(await flush())) return
     try {
-      if (connected.value) await invoke('codex_reset', { pane })
+      if (connected.value && lanes[pane].backend.profileId === 'codex-default')
+        await invoke('codex_reset', { pane })
       adopt(pane, await create(pane))
       await flush()
       await refreshHistory()
     } catch (e) {
       storageError.value = describe(e)
+    }
+  }
+  async function selectBackend(pane: Pane, profileId: string) {
+    if (!initialized.value || lanes[pane].busy || !(await flush())) return
+    const profile = backends.profiles.find((p) => p.id === profileId && p.config.enabled)
+    if (!profile) return
+    if (
+      profileId === lanes[pane].backend.profileId &&
+      profile.revision === lanes[pane].backend.profileRevision
+    )
+      return
+    try {
+      const draft = lanes[pane].draft
+      const changing = profileId !== lanes[pane].backend.profileId
+      adopt(pane, await create(pane, profileId))
+      lanes[pane].draft = draft
+      if (changing) {
+        const fallback =
+          profileId === 'codex-default'
+            ? (models.value.find((m) => m.isDefault)?.model ?? models.value[0]?.model ?? '')
+            : (backends.state(profileId).models[0] ?? '')
+        if (pane === 'main') mainModel.value = fallback
+        else tutorModel.value = fallback
+      }
+      await flush()
+      await refreshHistory()
+    } catch (e) {
+      lanes[pane].error = describe(e)
     }
   }
   return {
@@ -484,6 +591,7 @@ export const useChatStore = defineStore('chat', () => {
     lanes,
     ready,
     isReady,
+    selectBackend,
     label,
     connect,
     disconnect,

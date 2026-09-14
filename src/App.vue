@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, toRef, watch } from 'vue'
-import ConnectionSettings from './features/codex/ConnectionSettings.vue'
+import ConnectionSettings from './features/backends/BackendSettings.vue'
 import ConversationPanel from './features/conversation/ConversationPanel.vue'
 import TutorPanel from './features/tutor/TutorPanel.vue'
 import VocabularyPanel from './features/vocabulary/VocabularyPanel.vue'
