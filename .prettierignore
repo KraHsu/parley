@@ -7,3 +7,5 @@ package-lock.json
 Cargo.lock
 .agents
 .codex
+
+dist-web

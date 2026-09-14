@@ -6,6 +6,10 @@ Parley 是一个开源、以本地数据为主的语言学习桌面客户端，�
 
 通过官方 **Codex App Server** 接入：每位用户登录自己的 ChatGPT 账号，并使用自己的 Codex 额度。项目不提供共享账号或集中转发服务。Parley 是独立项目。
 
+## Web 端
+
+[打开 Parley Web](https://krahsu.github.io/parley/) · Web 版本只使用用户自己的 API，支持双面板对话、语言助手、词句收藏与浏览器本地学习数据。开发运行 `npm run web:dev`，构建运行 `npm run web:build`，静态文件输出到 `dist-web/`，可部署到 GitHub Pages。密钥只保留在当前标签页内存；浏览器直连需要服务允许 CORS。详见 [Web 使用与部署说明](docs/WEB.md)。
+
 ## 下载安装
 
 从 [GitHub Releases](https://github.com/KraHsu/parley/releases) 下载 Linux 安装包。当前提供 Ubuntu 24.04 x86_64 预览版，包含桌面程序和 `parley-cli`；安装后无需编译源码。步骤见 [安装说明](docs/INSTALL.md)。
