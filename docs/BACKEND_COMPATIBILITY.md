@@ -12,7 +12,7 @@
 | Kimi                    | 分片、末块用量、历史 reasoning 回传、多轮、流内错误  | 未验收                                                                                     | 不强制通用 thinking / temperature 参数                                          |
 | GLM / Z.AI              | 分片、末块用量、空工具字段、多轮、错误信封           | 未验收                                                                                     | 测试针对 Z.AI 协议；中国区智谱端点未验收                                        |
 | 自定义 Chat Completions | 共享流解析、失败状态及上下文预算                     | 取决于目标服务                                                                             | 仅保证本文列出的文本协议子集                                                    |
-| Codex GUI / 原生终端    | CLI 0.154.0 双配置、通用 turn、有界通知与合并保存    | gpt-5.6-luna 双面板、重启续聊、首段后取消及另一面板完成通过                                | 多配置共享所选 CLI 的本机登录目录                                               |
+| Codex GUI / 原生终端    | CLI 0.154.0 双配置、通用 turn、有界通知与合并保存    | gpt-5.6-luna 双面板、重启续聊、取消隔离；原生 TUI + API fixture 解释、收藏及 GUI 重启通过  | 多配置共享所选 CLI 的本机登录目录                                               |
 | Claude Code GUI         | CLI 2.1.269 回环 API、显式 session fork              | 真实服务待验收                                                                             | 使用独立 API Key                                                                |
 | Claude Code 原生终端    | HTTP hooks 共存、终端上下文 ACL、独立窗口关闭        | CLI 2.1.269 原生登录，`--model fable` 两轮真实回复自动同步；API fixture 答疑与词句收藏通过 | 仅同步本次启动后最近六轮；GUI 关闭后退出 CLI 可能显示 hook 连接失败，但退出成功 |
 
@@ -39,7 +39,7 @@
 
 `0.4.0-alpha.1` 已在隔离的 Ubuntu 24.04 amd64 环境通过 APT 实际安装并运行。环境未安装 Node、Codex 或 Claude Code；真实 Tauri/WebKit 窗口配合本机 Responses fixture，完成系统凭据库保存与应用重启读取、两侧对话、一侧停止而另一侧完成、选词解释保存、离线复习、JSON v2 导出及去重导入、再次重启与来源跳转。数据库完整性和外键检查通过。
 
-这证明安装包的本地学习与 API 接入链路，不代表已通过真实 OpenAI 服务验收。该学习闭环最初使用剪贴板；后续另以 IBus 真实拼音输入验证中文候选、主辅面板组合输入回车不误发、换行和重启草稿恢复。另从开发 deb 解包运行原生 Claude Code + API fixture 助手，完成两轮同步、答疑与保留终端来源的收藏；该组合未调用真实 API 厂商。Windows/macOS 原生运行仍待验证。系统凭据库实测为 Linux GNOME Keyring Secret Service，其他平台凭据库不能据此视为已验证。
+这证明安装包的本地学习与 API 接入链路，不代表已通过真实 OpenAI 服务验收。该学习闭环最初使用剪贴板；后续另以 IBus 真实拼音输入验证中文候选、主辅面板组合输入回车不误发、换行和重启草稿恢复。另从开发 deb 解包运行 Codex / Claude Code 原生 TUI + API fixture 助手，分别完成自动同步、答疑与保留终端来源的收藏；Codex 组合另通过 GUI 重启、手动重新关联历史及离线词句恢复。这些组合未调用真实 API 厂商。Windows/macOS 原生运行仍待验证。系统凭据库实测为 Linux GNOME Keyring Secret Service，其他平台凭据库不能据此视为已验证。
 
 ## 平台检查范围
 
@@ -49,4 +49,4 @@
 | macOS              | 修复路径夹具后的 CI 检查、测试和 Tauri 调试构建通过                                                         | 原生窗口操作、Keychain、CLI 进程与终端行为；安装包           |
 | Windows            | 修复路径夹具后的 CI 检查、测试和 Tauri 调试构建通过                                                         | 原生窗口操作、Credential Manager、CLI 进程与终端行为；安装包 |
 
-[首次多后端 CI](https://github.com/KraHsu/parley/actions/runs/34859678767) 的提交为 `a24ab8c`，Windows 因测试路径夹具失败，不能把整次运行标为成功。修复提交 `731a8c9` 的[三平台 CI](https://github.com/KraHsu/parley/actions/runs/34860914892) 全部通过。后续修改的状态见验证分支 [Workspace checks](https://github.com/KraHsu/parley/actions/workflows/ci.yml)。构建通过不等于原生运行验收完成。
+[首次多后端 CI](https://github.com/KraHsu/parley/actions/runs/34859678767) 的提交为 `a24ab8c`，Windows 因测试路径夹具失败，不能把整次运行标为成功。修复提交 `731a8c9` 的[三平台 CI](https://github.com/KraHsu/parley/actions/runs/34860914892) 全部通过。包含 Claude 同步 ACL 修复的 `1a5525b` 也已通过[三平台 CI](https://github.com/KraHsu/parley/actions/runs/34863338351)。后续修改的状态见验证分支 [Workspace checks](https://github.com/KraHsu/parley/actions/workflows/ci.yml)。构建通过不等于原生运行验收完成。

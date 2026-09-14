@@ -70,4 +70,4 @@ target/debug/parley-cli --backend claude-code --claude /path/to/claude -- --resu
 
 语法窗口关闭后，原生 CLI 继续运行；接收器停止，Claude 可能显示非阻塞的 hook 连接提示。需要重新同步时重新运行终端伴随启动器。`--no-gui` 完全不添加同步插件；bare / safe 模式或管理策略禁用 hooks 时，终端仍可使用，GUI 显示尚未接收到事件。
 
-已验证 Linux 本机 Claude Code `2.1.269` 的实际 hooks 投递、与已有 Stop hook 共存，以及原生启动器版本输出。hooks 实测使用临时目录和回环模拟 API，没有真实服务调用；完整交互式 TUI、GUI 选词保存流程及 Windows/macOS 仍待验收。
+已验证 Linux 本机 Claude Code `2.1.269` 的 hooks 投递及与已有 Stop hook 共存；另通过原生已登录 TUI 完成两轮真实回复，自动同步到 GUI，并配合 API fixture 答疑及保存终端来源词句。Codex `0.154.0 / gpt-5.6-luna` 也已通过原生 TUI、API fixture 解释、收藏与 GUI 重启恢复。两项组合均从 Linux 开发 deb 解包运行，API 侧尚未调用真实厂商；Windows/macOS 原生窗口仍待验收。详细证据见[多后端实现记录](MULTI_BACKEND_IMPLEMENTATION.md)。

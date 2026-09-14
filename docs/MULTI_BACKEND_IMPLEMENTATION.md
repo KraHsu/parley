@@ -324,3 +324,19 @@ Rust **107 项**普通测试、前端 **62 项**测试通过；格式、TypeScri
 首次 CLI 运行触发官方自动更新器，将本机 Claude 启动链接指向测试数据目录；已原子恢复为原有 2.1.269，复核解析路径正确。后续验证直接指定该版本可执行文件，并仅对测试进程设置 `DISABLE_AUTOUPDATER=1`。没有修改 Parley 的 CLI 选择逻辑，也没有复制登录凭据到 GUI 或 API 配置；宿主机已安装 Parley 和正式学习数据库保持原状。
 
 ACL 修复通过本地格式、类型、Clippy 检查及发布包构建，终端模块普通测试通过；实际包窗口验证覆盖了之前单元测试未触及的权限集成问题。真实 API 厂商、Claude GUI API 凭据模式及其他组合仍待验收。
+
+## 2026-09-14：Codex 原生 TUI 与 API 助手组合
+
+包含 Claude 同步 ACL 修复的 `1a5525b` 已通过 Linux、macOS、Windows 的格式、类型、Clippy、测试及 Tauri 调试构建（[run 34863338351](https://github.com/KraHsu/parley/actions/runs/34863338351)）。本节点不修改业务实现。
+
+从 `0.4.0-alpha.1` deb 解包运行原生 Codex CLI 0.154.0，使用本机已有登录、`gpt-5.6-luna`、独立空工作目录及临时 Parley 数据目录：
+
+1. 原生 TUI 回复 “I enjoy learning languages.”；GUI 自动关联新会话，切换到 API 助手后仍显示该回复。终端没有通过复制或模拟 IPC 同步。
+2. GUI 添加 Responses fixture、选择仅本次会话密钥及模型；点击“解释当前回复”。真实回环请求认证通过，SSE 完成，Diesel turn 为 complete，引用材料为所查看的 Codex 回复。固定 fixture 回答只验证接入链路。
+3. 点击“收藏整句”，手动填写中文释义；来源保存 `codex / openai`、原生 thread/turn/item 及原句快照。数据库完整性、外键检查通过。
+4. 正常关闭 GUI，TUI 继续运行；重启同一数据目录的 GUI，API 会话密钥按预期失效。手动选择原终端会话仍可读取原生历史，API 助手历史及离线词句保留；没有自动重发。
+5. 再次正常关闭 GUI 后，原生 `/quit` 返回状态 0；所有测试窗口、只读 App Server、Xvfb 和回环服务均已回收。宿主机已安装 Parley 与正式学习数据库未修改。
+
+![Codex 原生回复收藏及来源](screenshots/multi-codex-terminal-word.png)
+
+该组合验证包含一次真实 Codex 回复和一次本地 API fixture 请求；不能替代真实 API 厂商验收，也不覆盖所有原生快捷键。终端上下文 3 项前端测试另行通过，业务实现的完整测试沿用上述 CI。两个原生 CLI 的安装包载荷均已通过基本联动；真实厂商、Claude GUI API 凭据模式、规定的真实跨后端组合和最终发布仍未完成。
