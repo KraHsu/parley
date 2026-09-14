@@ -116,9 +116,12 @@ pub(super) fn insert_source(
     db: &mut SqliteConnection,
     entry_id: &str,
     source: &Source,
-) -> Result<()> {
+) -> Result<String> {
     source.validate()?;
-    let mut source = source.clone();
+    let mut source = super::sources::resolve(db, source)?;
+    if let Some((_, hash)) = super::sources::matching(db, &source, Some(entry_id), None)? {
+        return Ok(hash);
+    }
     let hash = source.fingerprint();
     if let (Some(conversation), Some(message)) = (&source.conversation_id, &source.message_id) {
         let found = diesel::select(exists(
@@ -151,13 +154,17 @@ pub(super) fn insert_source(
             o::end.eq(source.end as i64),
             o::locator_version.eq(i64::from(source.locator_version)),
             o::truncated.eq(i64::from(source.truncated)),
-            o::fingerprint.eq(hash),
+            o::fingerprint.eq(&hash),
+            o::backend.eq(source
+                .backend
+                .as_ref()
+                .map(|b| serde_json::to_string(b).expect("public source serializes"))),
         ))
         .on_conflict((o::entry_id, o::fingerprint))
         .do_nothing()
         .execute(db)
         .map_err(error)?;
-    Ok(())
+    Ok(hash)
 }
 fn clear_draft(db: &mut SqliteConnection, id: &Option<String>) -> Result<()> {
     if let Some(id) = id {
@@ -282,22 +289,23 @@ impl Storage {
                     duplicate: previous.duplicate,
                 });
             }
+            let source = request
+                .occurrence
+                .as_ref()
+                .map(|source| super::sources::resolve(db, source))
+                .transpose()?;
             if request.id.is_none()
                 && !request.allow_duplicate
-                && let Some(source) = &request.occurrence
+                && let Some(source) = &source
             {
-                let existing = e::table
-                    .inner_join(o::table.on(o::entry_id.eq(e::id)))
-                    .filter(o::fingerprint.eq(source.fingerprint()))
-                    .filter(e::language.eq(language(&request.fields.language)?))
-                    .filter(e::deleted_at.is_null())
-                    .order(e::created_at)
-                    .select(e::id)
-                    .first::<String>(db)
-                    .optional()
-                    .map_err(error)?;
+                let existing = super::sources::matching(
+                    db,
+                    source,
+                    None,
+                    Some(&language(&request.fields.language)?),
+                )?;
                 // Preserve the draft so a newly entered meaning is never silently discarded.
-                if let Some(id) = existing {
+                if let Some((id, _)) = existing {
                     return Ok(SaveResult {
                         entry: get_entry(db, &id)?,
                         duplicate: true,
@@ -490,6 +498,7 @@ mod tests {
             snapshot: "How have you been?".into(),
             start: 4,
             end: 17,
+            backend: None,
             locator_version: 1,
             truncated: false,
         }
@@ -546,7 +555,10 @@ mod tests {
                     .total,
                 1
             );
-            assert_eq!(again.entry.occurrences[0].source, source());
+            assert_eq!(
+                again.entry.occurrences[0].source.legacy_identity(),
+                source()
+            );
         }
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -722,8 +734,8 @@ mod tests {
         let (_, pending) = target.vocabulary_preview(backup.clone()).unwrap();
         target.vocabulary_import(&pending, &id(), false).unwrap();
         let occurrences = target.vocabulary_get(&first.id).unwrap().occurrences;
-        assert_eq!(occurrences[0].source, source());
-        assert_eq!(occurrences[1].source, second);
+        assert_eq!(occurrences[0].source.legacy_identity(), source());
+        assert_eq!(occurrences[1].source.legacy_identity(), second);
         assert_eq!(
             serde_json::to_value(&target.vocabulary_backup(false).unwrap().entries).unwrap(),
             serde_json::to_value(&backup.entries).unwrap()
@@ -818,7 +830,7 @@ mod tests {
             .execute(&mut legacy)
             .unwrap();
         super::super::migrate(&mut legacy).unwrap();
-        assert_eq!(super::super::schema_version(&mut legacy).unwrap(), 5);
+        assert_eq!(super::super::schema_version(&mut legacy).unwrap(), 6);
         assert_eq!(
             text(&mut legacy, "SELECT value FROM preferences"),
             r#"{"targetLanguage":"ja"}"#

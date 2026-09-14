@@ -255,7 +255,7 @@ mod tests {
 
     #[test]
     fn upgrade_creates_a_readable_pre_migration_backup() {
-        for version in [3, 4] {
+        for version in [3, 4, 5] {
             check_upgrade_backup(version);
         }
     }
@@ -279,7 +279,7 @@ mod tests {
                 p.file_name()
                     .unwrap()
                     .to_string_lossy()
-                    .starts_with("parley-before-v5-")
+                    .starts_with("parley-before-v6-")
             })
             .collect();
         assert_eq!(backups.len(), 1);

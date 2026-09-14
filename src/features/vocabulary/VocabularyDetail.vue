@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useVocabularyStore } from './store'
+import { sourceLabel } from './sourceLabel'
 import LearningControls from './LearningControls.vue'
 const vocabulary = useVocabularyStore()
 const confirmPurge = ref(false)
@@ -32,15 +33,7 @@ watch(
         :key="source.id"
         class="word-source"
       >
-        <span class="overline">{{
-          source.sourceKind === 'terminal'
-            ? source.threadId?.startsWith('claude-code:')
-              ? 'Claude Code 终端'
-              : 'Codex 终端'
-            : source.sourceKind === 'import'
-              ? '导入材料'
-              : '对话原句'
-        }}</span>
+        <span class="overline">{{ sourceLabel(source) }}</span>
         <blockquote dir="auto">{{ source.snapshot }}</blockquote>
         <small
           >{{ source.truncated ? '来源片段 · ' : ''

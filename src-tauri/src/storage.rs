@@ -4,6 +4,7 @@ pub mod exchange;
 mod learning_rows;
 pub mod review;
 pub(crate) mod schema;
+mod sources;
 mod typed;
 pub mod vocabulary;
 mod workspace;
@@ -25,6 +26,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/003_vocabulary_review.sql"),
     include_str!("../migrations/004_model_backends.sql"),
     include_str!("../migrations/005_api_turns.sql"),
+    include_str!("../migrations/006_source_backends.sql"),
 ];
 
 #[derive(Clone)]
@@ -167,9 +169,12 @@ fn migrate(db: &mut SqliteConnection) -> Result<()> {
         return Err("数据库来自更新版本的 Parley。请升级应用；原始数据未改动。".into());
     }
     if (version as usize) < MIGRATIONS.len() {
-        db.transaction::<(), diesel::result::Error, _>(|db| {
+        db.transaction::<(), typed::DbError, _>(|db| {
             for migration in &MIGRATIONS[version as usize..] {
                 db.batch_execute(migration)?;
+            }
+            if version < 6 {
+                sources::migrate(db)?;
             }
             Ok(())
         })

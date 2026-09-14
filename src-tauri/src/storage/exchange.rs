@@ -61,6 +61,14 @@ fn backup_entry(db: &mut SqliteConnection, id: &str) -> Result<BackupEntry> {
         reviews,
     })
 }
+fn entry_fingerprint(entry: &BackupEntry) -> Result<String> {
+    let mut entry = entry.clone();
+    for occurrence in &mut entry.occurrences {
+        occurrence.source = occurrence.source.legacy_identity();
+    }
+    fingerprint(&entry)
+}
+
 #[derive(serde::Serialize)]
 struct Decision {
     kind: &'static str,
@@ -73,7 +81,7 @@ fn decisions(db: &mut SqliteConnection, backup: &Backup) -> Result<Vec<Decision>
         .entries
         .iter()
         .map(|entry| {
-            let hash = fingerprint(entry)?;
+            let hash = entry_fingerprint(entry)?;
             let mapped = imports::table
                 .find((&backup.dataset_id, &entry.id, &hash))
                 .select(imports::local_id)
@@ -84,7 +92,7 @@ fn decisions(db: &mut SqliteConnection, backup: &Backup) -> Result<Vec<Decision>
                 return Ok(Decision {
                     kind: "duplicate",
                     hash,
-                    current_hash: Some(fingerprint(&backup_entry(db, &existing)?)?),
+                    current_hash: Some(entry_fingerprint(&backup_entry(db, &existing)?)?),
                     existing: Some(existing),
                 });
             }
@@ -107,7 +115,7 @@ fn decisions(db: &mut SqliteConnection, backup: &Backup) -> Result<Vec<Decision>
             };
             let current_hash = existing
                 .as_ref()
-                .map(|id| backup_entry(db, id).and_then(|entry| fingerprint(&entry)))
+                .map(|id| backup_entry(db, id).and_then(|entry| entry_fingerprint(&entry)))
                 .transpose()?;
             let kind = if current_hash.as_deref() == Some(&hash) {
                 "duplicate"
@@ -153,7 +161,7 @@ fn insert_record(db: &mut SqliteConnection, record: &BackupEntry, copy: bool) ->
         let mut source = occurrence.source.clone();
         source.conversation_id = None;
         source.message_id = None;
-        insert_source(db, &id, &source)?;
+        let source_hash = insert_source(db, &id, &source)?;
         let occurrence_id = free_id(
             &occurrence.id,
             copy,
@@ -164,7 +172,7 @@ fn insert_record(db: &mut SqliteConnection, record: &BackupEntry, copy: bool) ->
         diesel::update(
             o::table
                 .filter(o::entry_id.eq(&id))
-                .filter(o::fingerprint.eq(source.fingerprint())),
+                .filter(o::fingerprint.eq(source_hash)),
         )
         .set(o::id.eq(occurrence_id))
         .execute(db)
@@ -251,7 +259,7 @@ impl Storage {
                 .collect::<Result<_>>()?;
             Ok(Backup {
                 format: "parley-vocabulary".into(),
-                version: 1,
+                version: 2,
                 dataset_id,
                 exported_at: now(),
                 entries,
@@ -414,6 +422,7 @@ mod tests {
                     snapshot: "Un café ☕".into(),
                     start: 3,
                     end: 7,
+                    backend: None,
                     locator_version: 1,
                     truncated: false,
                 }),
@@ -591,6 +600,362 @@ mod tests {
         value["unexpected"] = "field".into();
         assert!(Backup::parse(&serde_json::to_vec(&value).unwrap()).is_err());
     }
+    fn legacy(backup: &Backup) -> Backup {
+        let mut backup = backup.clone();
+        backup.version = 1;
+        for entry in &mut backup.entries {
+            for occurrence in &mut entry.occurrences {
+                occurrence.source.backend = None;
+            }
+        }
+        backup.validate().unwrap();
+        backup
+    }
+
+    fn downgrade_to_v5(storage: &Storage) {
+        let mut db = storage.db.lock().unwrap();
+        // Recreate the exact previous schema, without changing historical import keys.
+        db.batch_execute(
+            "ALTER TABLE vocabulary_occurrences DROP COLUMN backend; PRAGMA user_version=5;",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn v1_import_keys_survive_upgrade_including_conflict_copies() {
+        let old = legacy(&populated().vocabulary_backup(false).unwrap());
+        // Frozen v1 wire identity; adding public metadata must not change this key.
+        assert_eq!(
+            old.entries[0].occurrences[0].source.fingerprint(),
+            "2d1d5a6fe7027d11a6cd0c60c900f68b17738bd4086b45d9928d8f39647946ba"
+        );
+        assert_eq!(
+            fingerprint(&old.entries[0]).unwrap(),
+            entry_fingerprint(&old.entries[0]).unwrap()
+        );
+        let target = Storage::memory();
+        let (_, pending) = target.vocabulary_preview(old.clone()).unwrap();
+        target.vocabulary_import(&pending, &id(), false).unwrap();
+        let mut changed = old.clone();
+        changed.entries[0].fields.note = "updated export".into();
+        let (_, pending) = target.vocabulary_preview(changed.clone()).unwrap();
+        target.vocabulary_import(&pending, &id(), true).unwrap();
+        let before = target.vocabulary_backup(false).unwrap();
+        let hashes = o::table
+            .select((o::id, o::fingerprint))
+            .order(o::rowid)
+            .load::<(String, String)>(&mut *target.db.lock().unwrap())
+            .unwrap();
+        downgrade_to_v5(&target);
+        super::super::migrate(&mut target.db.lock().unwrap()).unwrap();
+        assert_eq!(
+            hashes,
+            o::table
+                .select((o::id, o::fingerprint))
+                .order(o::rowid)
+                .load::<(String, String)>(&mut *target.db.lock().unwrap())
+                .unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(before.entries).unwrap(),
+            serde_json::to_value(target.vocabulary_backup(false).unwrap().entries).unwrap()
+        );
+        for backup in [old, changed] {
+            let (preview, pending) = target.vocabulary_preview(backup).unwrap();
+            assert_eq!(
+                (preview.duplicates, preview.added, preview.conflicts),
+                (1, 0, 0)
+            );
+            assert_eq!(
+                target
+                    .vocabulary_import(&pending, &id(), true)
+                    .unwrap()
+                    .duplicates,
+                1
+            );
+        }
+        let v2 = target.vocabulary_backup(false).unwrap();
+        assert_eq!(v2.version, 2);
+        let legacy_claude_storage = populated();
+        let mut legacy_claude = legacy(&legacy_claude_storage.vocabulary_backup(false).unwrap());
+        legacy_claude.entries[0].occurrences[0].source.thread_id =
+            Some("claude-code:older-session".into());
+        let legacy_hash = fingerprint(&legacy_claude.entries[0]).unwrap();
+        let claude_target = Storage::memory();
+        let (_, pending) = claude_target
+            .vocabulary_preview(legacy_claude.clone())
+            .unwrap();
+        claude_target
+            .vocabulary_import(&pending, &id(), false)
+            .unwrap();
+        let enriched = claude_target.vocabulary_backup(false).unwrap();
+        assert_eq!(
+            entry_fingerprint(&enriched.entries[0]).unwrap(),
+            legacy_hash
+        );
+        // Own-dataset imports may have no import map yet; content still matches.
+        diesel::delete(imports::table)
+            .execute(&mut *claude_target.db.lock().unwrap())
+            .unwrap();
+        assert_eq!(
+            claude_target
+                .vocabulary_preview(legacy_claude)
+                .unwrap()
+                .0
+                .duplicates,
+            1
+        );
+        let other = Storage::memory();
+        let (_, pending) = other.vocabulary_preview(v2.clone()).unwrap();
+        other.vocabulary_import(&pending, &id(), false).unwrap();
+        assert_eq!(other.vocabulary_preview(v2).unwrap().0.duplicates, 2);
+        assert_eq!(
+            target.vocabulary_list(&ListQuery::default()).unwrap().total,
+            2
+        );
+    }
+
+    fn source_request(source: Source) -> SaveRequest {
+        SaveRequest {
+            request_id: id(),
+            id: None,
+            expected_revision: None,
+            fields: populated()
+                .vocabulary_backup(false)
+                .unwrap()
+                .entries
+                .remove(0)
+                .fields,
+            occurrence: Some(source),
+            draft_id: None,
+            allow_duplicate: false,
+            tags: vec![],
+        }
+    }
+
+    #[test]
+    fn source_namespaces_language_and_trash_do_not_cross_deduplicate() {
+        use crate::backends::types::{BackendKind, Provider};
+        use crate::vocabulary::SourceBackend;
+        let storage = populated();
+        let old = storage.vocabulary_backup(false).unwrap().entries[0].occurrences[0]
+            .source
+            .clone();
+        let mut request = source_request(old.clone());
+        assert!(storage.vocabulary_save(&request).unwrap().duplicate);
+        request.occurrence.as_mut().unwrap().backend = Some(SourceBackend {
+            kind: BackendKind::ClaudeCode,
+            provider: Provider::Anthropic,
+            model: None,
+        });
+        let claude = storage.vocabulary_save(&request).unwrap();
+        assert!(!claude.duplicate);
+        assert_eq!(
+            claude.entry.occurrences[0].source.thread_id.as_deref(),
+            Some("claude-code:external-thread")
+        );
+        request.request_id = id();
+        assert!(storage.vocabulary_save(&request).unwrap().duplicate);
+        request.fields.language = "en".into();
+        request.request_id = id();
+        let english = storage.vocabulary_save(&request).unwrap();
+        assert!(!english.duplicate);
+        request.request_id = id();
+        assert_eq!(
+            storage.vocabulary_save(&request).unwrap().entry.id,
+            english.entry.id
+        );
+        diesel::update(e::table.find(&english.entry.id))
+            .set(e::deleted_at.eq(Some(now())))
+            .execute(&mut *storage.db.lock().unwrap())
+            .unwrap();
+        request.request_id = id();
+        assert!(!storage.vocabulary_save(&request).unwrap().duplicate);
+        let backup = storage.vocabulary_backup(true).unwrap();
+        let target = Storage::memory();
+        let (_, pending) = target.vocabulary_preview(backup.clone()).unwrap();
+        target.vocabulary_import(&pending, &id(), false).unwrap();
+        assert_eq!(
+            serde_json::to_value(&backup.entries).unwrap(),
+            serde_json::to_value(target.vocabulary_backup(true).unwrap().entries).unwrap()
+        );
+    }
+
+    #[test]
+    fn source_migration_uses_historical_binding_and_rolls_back_invalid_metadata() {
+        use super::super::schema::{
+            backend_profile_versions as v, conversations as c, messages as m,
+        };
+        use crate::backends::types::{BackendKind, ProfileConfig, Provider, SaveProfile};
+        let storage = populated();
+        let profile = storage
+            .save_backend_profile(SaveProfile {
+                id: None,
+                expected_revision: None,
+                config: ProfileConfig {
+                    name: "Original".into(),
+                    kind: BackendKind::AnthropicMessages,
+                    provider: Provider::Anthropic,
+                    endpoint: "https://api.anthropic.com/v1".into(),
+                    binary_path: String::new(),
+                    enabled: true,
+                },
+            })
+            .unwrap();
+        storage
+            .create_for_backend("local-conversation", "main", &profile.id)
+            .unwrap();
+        {
+            let mut db = storage.db.lock().unwrap();
+            diesel::update(c::table.find("local-conversation"))
+                .set(c::model.eq("original-model"))
+                .execute(&mut *db)
+                .unwrap();
+            diesel::insert_into(m::table)
+                .values((
+                    m::id.eq("message"),
+                    m::conversation_id.eq("local-conversation"),
+                    m::role.eq("assistant"),
+                    m::text.eq("Un café ☕"),
+                    m::status.eq("complete"),
+                ))
+                .execute(&mut *db)
+                .unwrap();
+        }
+        let mut source = storage.vocabulary_backup(false).unwrap().entries[0].occurrences[0]
+            .source
+            .clone();
+        source.source_kind = "main".into();
+        source.conversation_id = Some("local-conversation".into());
+        source.message_id = Some("message".into());
+        source.backend = None;
+        let request = source_request(source.clone());
+        let saved = storage.vocabulary_save(&request).unwrap().entry;
+        assert_eq!(
+            saved.occurrences[0]
+                .source
+                .backend
+                .as_ref()
+                .unwrap()
+                .model
+                .as_deref(),
+            Some("original-model")
+        );
+        let mut spoofed = request.clone();
+        spoofed.request_id = id();
+        spoofed.occurrence.as_mut().unwrap().backend = Some(crate::vocabulary::SourceBackend {
+            kind: BackendKind::Codex,
+            provider: Provider::Openai,
+            model: None,
+        });
+        assert!(storage.vocabulary_save(&spoofed).is_err());
+        let mut updated = profile.config.clone();
+        updated.name = "Renamed service".into();
+        updated.endpoint = "https://api.example.com/v1".into();
+        storage
+            .save_backend_profile(SaveProfile {
+                id: Some(profile.id.clone()),
+                expected_revision: Some(1),
+                config: updated,
+            })
+            .unwrap();
+        // Old API occurrences had no metadata and used the legacy source fingerprint.
+        diesel::update(o::table.filter(o::entry_id.eq(&saved.id)))
+            .set(o::fingerprint.eq(source.legacy_fingerprint()))
+            .execute(&mut *storage.db.lock().unwrap())
+            .unwrap();
+        downgrade_to_v5(&storage);
+        {
+            let mut db = storage.db.lock().unwrap();
+            diesel::update(v::table.find((&profile.id, 1_i64)))
+                .set(v::config.eq("{}"))
+                .execute(&mut *db)
+                .unwrap();
+            assert!(super::super::migrate(&mut db).is_err());
+            assert_eq!(super::super::schema_version(&mut db).unwrap(), 5);
+            assert_eq!(
+                super::super::test_support::integer(
+                    &mut db,
+                    "SELECT COUNT(*) AS value FROM pragma_table_info('vocabulary_occurrences') WHERE name='backend'"
+                ),
+                0
+            );
+            diesel::update(v::table.find((&profile.id, 1_i64)))
+                .set(v::config.eq(serde_json::to_string(&profile.config).unwrap()))
+                .execute(&mut *db)
+                .unwrap();
+            super::super::migrate(&mut db).unwrap();
+        }
+        let restored = storage.vocabulary_get(&saved.id).unwrap();
+        assert_eq!(
+            restored.occurrences[0].source.backend,
+            saved.occurrences[0].source.backend
+        );
+        assert!(
+            storage
+                .vocabulary_save(&SaveRequest {
+                    request_id: id(),
+                    ..request
+                })
+                .unwrap()
+                .duplicate
+        );
+        assert_eq!(
+            storage.read("local-conversation").unwrap().messages.len(),
+            1
+        );
+        storage.delete("local-conversation").unwrap();
+        let detached = storage.vocabulary_get(&saved.id).unwrap();
+        assert!(detached.occurrences[0].source.conversation_id.is_none());
+        assert_eq!(
+            detached.occurrences[0].source.backend,
+            restored.occurrences[0].source.backend
+        );
+        assert_eq!(detached.occurrences[0].source.snapshot, "Un café ☕");
+        let backup = storage.vocabulary_backup(false).unwrap();
+        let json = serde_json::to_string(&backup).unwrap();
+        for forbidden in ["endpoint", "binaryPath", "profileId", "api.anthropic.com"] {
+            assert!(!json.contains(forbidden));
+        }
+        let target = Storage::memory();
+        let (_, pending) = target.vocabulary_preview(backup.clone()).unwrap();
+        target.vocabulary_import(&pending, &id(), false).unwrap();
+        let imported = target.vocabulary_get(&saved.id).unwrap();
+        assert_eq!(
+            imported.occurrences[0].source.backend,
+            detached.occurrences[0].source.backend
+        );
+        assert_eq!(
+            target
+                .vocabulary_preview(backup.clone())
+                .unwrap()
+                .0
+                .duplicates,
+            2
+        );
+        let mut value = serde_json::to_value(&backup).unwrap();
+        value["entries"][1]["occurrences"][0]["backend"]["apiKey"] = "forbidden".into();
+        assert!(Backup::parse(&serde_json::to_vec(&value).unwrap()).is_err());
+        let mut unknown = legacy(&backup);
+        unknown.entries.retain(|e| e.id == saved.id);
+        let unknown_target = Storage::memory();
+        let (_, pending) = unknown_target.vocabulary_preview(unknown).unwrap();
+        unknown_target
+            .vocabulary_import(&pending, &id(), false)
+            .unwrap();
+        let unknown_backup = unknown_target.vocabulary_backup(false).unwrap();
+        unknown_backup.validate().unwrap();
+        assert!(
+            unknown_backup.entries[0].occurrences[0]
+                .source
+                .backend
+                .is_none()
+        );
+        let mut v1 = backup;
+        v1.version = 1;
+        assert!(v1.validate().is_err());
+    }
+
     #[test]
     fn csv_quotes_multiline_unicode_and_neutralizes_formulas() {
         let mut backup = populated().vocabulary_backup(false).unwrap();

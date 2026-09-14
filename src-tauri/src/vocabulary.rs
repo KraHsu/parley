@@ -21,6 +21,31 @@ pub struct EntryFields {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SourceBackend {
+    pub kind: crate::backends::types::BackendKind,
+    pub provider: crate::backends::types::Provider,
+    pub model: Option<String>,
+}
+impl SourceBackend {
+    pub fn validate(&self) -> Result<()> {
+        use crate::backends::types::{BackendKind as K, Provider as P};
+        if !matches!(
+            (self.kind, self.provider),
+            (K::Codex | K::OpenaiResponses, P::Openai)
+                | (K::ClaudeCode | K::AnthropicMessages, P::Anthropic)
+                | (K::GeminiInteractions, P::Google)
+                | (K::OpenaiCompatible, _)
+        ) {
+            return Err("来源厂商与协议不匹配。".into());
+        }
+        if let Some(model) = &self.model {
+            bounded(model, 200, "来源模型")?;
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Source {
     pub source_kind: String,
     pub conversation_id: Option<String>,
@@ -35,6 +60,8 @@ pub struct Source {
     pub end: usize,
     pub locator_version: u32,
     pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<SourceBackend>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -183,6 +210,15 @@ impl EntryFields {
 }
 impl Source {
     pub fn validate(&self) -> Result<()> {
+        if let Some(backend) = &self.backend {
+            backend.validate()?;
+            if ["manual", "import"].contains(&self.source_kind.as_str()) {
+                return Err("手动或导入材料不能附带模型后端。".into());
+            }
+            if self.source_kind == "terminal" && !backend.kind.is_cli() {
+                return Err("终端来源必须属于本机 CLI。".into());
+            }
+        }
         if !["main", "tutor", "terminal", "manual", "import"].contains(&self.source_kind.as_str())
             || !["user", "assistant", "manual"].contains(&self.role.as_str())
             || self.locator_version != 1
@@ -227,8 +263,21 @@ impl Source {
         }
         Ok(())
     }
+    // CLI identity already includes its thread namespace; preserve v1 import hashes.
+    pub fn legacy_identity(&self) -> Self {
+        let mut source = self.clone();
+        if source.backend.as_ref().is_some_and(|b| b.kind.is_cli()) {
+            source.backend = None;
+        }
+        source
+    }
+    pub fn legacy_fingerprint(&self) -> String {
+        let mut source = self.clone();
+        source.backend = None;
+        digest(&serde_json::to_string(&source).expect("source serializes"))
+    }
     pub fn fingerprint(&self) -> String {
-        digest(&serde_json::to_string(self).expect("source serializes"))
+        digest(&serde_json::to_string(&self.legacy_identity()).expect("source serializes"))
     }
 }
 

@@ -89,7 +89,7 @@ impl Backup {
         Ok(backup)
     }
     pub fn validate(&self) -> Result<()> {
-        if self.format != "parley-vocabulary" || self.version != 1 {
+        if self.format != "parley-vocabulary" || ![1, 2].contains(&self.version) {
             return Err("不支持的词句备份格式或版本，请升级 Parley 后重试。".into());
         }
         uuid(&self.dataset_id)?;
@@ -127,6 +127,29 @@ impl Backup {
                     return Err("备份中存在重复来源标识。".into());
                 }
                 source.source.validate()?;
+                if self.version == 1 && source.source.backend.is_some() {
+                    return Err("v1 备份不能包含 v2 后端来源字段。".into());
+                }
+                if self.version == 2
+                    && source.source.source_kind == "terminal"
+                    && source.source.backend.is_none()
+                {
+                    return Err("v2 终端来源缺少后端信息。".into());
+                }
+                if self.version == 2 && source.source.source_kind == "terminal" {
+                    let claude =
+                        source.source.backend.as_ref().is_some_and(|b| {
+                            b.kind == crate::backends::types::BackendKind::ClaudeCode
+                        });
+                    let namespaced = source
+                        .source
+                        .thread_id
+                        .as_ref()
+                        .is_some_and(|s| s.starts_with("claude-code:"));
+                    if claude != namespaced {
+                        return Err("终端来源命名空间与后端不匹配。".into());
+                    }
+                }
                 if !source_keys.insert(source.source.fingerprint()) {
                     return Err("备份包含重复来源。".into());
                 }

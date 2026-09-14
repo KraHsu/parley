@@ -63,6 +63,7 @@ pub(super) struct OccurrenceRow {
     locator_version: i64,
     truncated: i64,
     snapshot_hash: String,
+    backend: Option<String>,
 }
 impl TryFrom<OccurrenceRow> for Occurrence {
     type Error = String;
@@ -83,6 +84,10 @@ impl TryFrom<OccurrenceRow> for Occurrence {
                 end: u32::try_from(r.end).map_err(super::error)? as usize,
                 locator_version: u32::try_from(r.locator_version).map_err(super::error)?,
                 truncated: r.truncated != 0,
+                backend: r
+                    .backend
+                    .map(|v| serde_json::from_str(&v).map_err(super::error))
+                    .transpose()?,
             },
             snapshot_hash: r.snapshot_hash,
         })

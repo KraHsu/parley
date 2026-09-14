@@ -191,6 +191,7 @@ diesel::table! {
         locator_version -> BigInt,
         truncated -> BigInt,
         fingerprint -> Text,
+        backend -> Nullable<Text>,
     }
 }
 
