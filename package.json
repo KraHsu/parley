@@ -1,6 +1,6 @@
 {
   "name": "parley",
-  "version": "0.3.0",
+  "version": "0.4.0-alpha.1",
   "private": true,
   "description": "A local-first language learning desktop client built with Vue and Tauri.",
   "type": "module",
@@ -25,7 +25,7 @@
     "cli": "cargo run --locked --bin parley-cli --",
     "cli:build": "npm run desktop:check -- -- --locked && cargo build --locked --bin parley-cli",
     "tutor:dev": "tauri dev -- -- --tutor-only",
-    "package:linux": "tauri build --bundles deb -- --locked"
+    "package:linux": "tauri build --bundles deb -- --locked && node scripts/finalize-deb.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",

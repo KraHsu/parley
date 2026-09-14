@@ -33,3 +33,9 @@
 `src-tauri/src/backends/fixtures/compatible.json` 覆盖四个厂商的不同数据块布局。测试逐字节边界切分每份合成 SSE；另经真实回环 HTTP、BackendState 和 Diesel 执行每个厂商两轮成功回复及一轮流内失败，验证请求参数、认证头、续聊、用量和部分正文保存。
 
 真实服务验收还需要各厂商有效凭据，并逐项记录模型、日期、多轮、停止、错误和桌面学习流程。当前测试不证明模型质量、实际价格、账户权限或服务可用性。
+
+## Linux 安装包验证
+
+`0.4.0-alpha.1` 已在隔离的 Ubuntu 24.04 amd64 环境通过 APT 实际安装并运行。环境未安装 Node、Codex 或 Claude Code；真实 Tauri/WebKit 窗口配合本机 Responses fixture，完成系统凭据库保存与应用重启读取、两侧对话、一侧停止而另一侧完成、选词解释保存、离线复习、JSON v2 导出及去重导入、再次重启与来源跳转。数据库完整性和外键检查通过。
+
+这证明安装包的本地学习与 API 接入链路，不代表已通过真实 OpenAI 服务验收。中文通过剪贴板输入，实际输入法、CLI 与 API 的完整安装版组合，以及 Windows/macOS 原生运行仍待验证。系统凭据库实测为 Linux GNOME Keyring Secret Service，其他平台凭据库不能据此视为已验证。

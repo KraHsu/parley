@@ -24,18 +24,18 @@ if (process.platform === 'linux') {
   check('Linux desktop libraries', 'pkg-config', ['--modversion', 'gtk+-3.0', 'webkit2gtk-4.1'])
 }
 
-// Version probe only. Browser UI development does not need Codex.
+// Optional version probe. API chat and local learning do not need a CLI.
 if (process.platform !== 'win32') {
   check('Codex on PATH (reference only)', 'codex', ['--version'], false)
 } else {
   console.log(
-    'OPTIONAL Codex: run codex --version in your terminal before connecting desktop chat.',
+    'OPTIONAL Codex: run codex --version in your terminal before connecting the Codex backend.',
   )
   console.log('NOTE Windows: also install the C++ Build Tools and WebView2 runtime.')
 }
 
 console.log(
-  'NOTE Parley uses the Codex executable path saved in connection settings, not this PATH probe.',
+  'NOTE CLI backends use the executable path saved in settings. API chat does not require a CLI.',
 )
 
 if (process.platform === 'darwin') check('Xcode command line tools', 'xcode-select', ['-p'])

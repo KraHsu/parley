@@ -60,7 +60,7 @@ sudo apt remove parley
 
 ## 从源码构建安装包
 
-当前主分支包含尚未发布的多后端功能，使用方式见[模型服务设置](BACKENDS.md)。它会将旧工作区升级到 schema 7；运行前备份已有数据，旧版不能直接打开升级后的数据库。需要复现已发布的 v0.3.0 时，请使用对应 release tag，而不是当前主分支。
+当前主分支版本为 `0.4.0-alpha.1`，包含尚未发布的多后端功能，使用方式见[模型服务设置](BACKENDS.md)。它会将旧工作区升级到 schema 7；运行前备份已有数据，旧版不能直接打开升级后的数据库。需要复现已发布的 v0.3.0 时，请使用对应 release tag，而不是当前主分支。
 
 在配置好开发环境后执行：
 
@@ -69,4 +69,6 @@ npm ci
 npm run package:linux
 ```
 
-产物位于 `target/release/bundle/deb/`，包含 `parley`、`parley-cli`、应用菜单入口和安装文档。当前打包依赖下限针对 Ubuntu 24.04 构建环境；更换构建系统时应重新检查动态库依赖。
+产物及对应 `SHA256SUMS` 位于 `target/release/bundle/deb/`，包含 `parley`、`parley-cli`、应用菜单入口和安装文档。当前打包依赖下限针对 Ubuntu 24.04 构建环境；更换构建系统时应重新检查动态库依赖。
+
+开发包文件名为 `Parley_0.4.0-alpha.1_amd64.deb`；Debian 包内版本使用 `0.4.0~alpha.1`，保证版本顺序为 `0.3.0 < 0.4.0~alpha.1 < 0.4.0`。`npm run package:linux` 会在 Tauri 打包后完成版本转换并生成校验文件。开发包尚未发布，真实厂商与其他平台的验收状态见兼容记录。

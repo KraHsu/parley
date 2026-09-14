@@ -31,7 +31,7 @@ parley-cli -- resume --last
 
 ## 当前状态
 
-已发布的 v0.3.0 以 Codex 和词句学习为主。当前主分支正在开发多模型版本：已迁移至 Diesel，并接入 API、Codex 和 Claude Code GUI 的独立主辅面板。开发版的设置步骤见[模型服务指南](docs/BACKENDS.md)，已验证与待验证项目见[兼容记录](docs/BACKEND_COMPATIBILITY.md)。完整厂商实测及发布验收尚未完成。
+已发布的 v0.3.0 以 Codex 和词句学习为主。当前主分支为 `0.4.0-alpha.1` 多模型开发版：已迁移至 Diesel，并接入 API、Codex 和 Claude Code GUI 的独立主辅面板。开发版的设置步骤见[模型服务指南](docs/BACKENDS.md)，已验证与待验证项目见[兼容记录](docs/BACKEND_COMPATIBILITY.md)。完整厂商实测及发布验收尚未完成。
 
 当前支持 **官方 Codex TUI + 独立语法助手 GUI**，也保留双面板桌面工作台；词句收藏、注释、备份和离线复习已实现。操作见[词句学习指南](docs/VOCABULARY.md)。
 
@@ -74,7 +74,7 @@ npm run dev
 
 | 命令                                   | 用途                                          |
 | -------------------------------------- | --------------------------------------------- |
-| `npm run doctor`                       | 检查开发环境；聊天接入需要 Codex CLI          |
+| `npm run doctor`                       | 检查开发环境；CLI 接入依用户选择              |
 | `npm run dev`                          | Vite 浏览器界面预览                           |
 | `npm run desktop:dev`                  | 启动 Tauri 开发窗口                           |
 | `npm run build`                        | TypeScript 检查与前端生产构建                 |
