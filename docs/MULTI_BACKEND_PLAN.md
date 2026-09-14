@@ -1,6 +1,6 @@
 # 多模型后端开发计划
 
-状态：**开发中，P0/P1/P2 正在推进，尚未达到首版交付条件**。基于 v0.3.0 / `55cb6a5`；文档与官方接口核对日期：2026-09-14。作为 v0.4.0 的主线，保留 Vue + Rust + Tauri 技术栈。具体增量与验证见 [实现记录](MULTI_BACKEND_IMPLEMENTATION.md)。
+状态：**开发中，Diesel 业务迁移已完成，API 与 Claude Code 接入继续推进，尚未达到首版交付条件**。基于 v0.3.0 / `55cb6a5`；文档与官方接口核对日期：2026-09-14。作为 v0.4.0 的主线，保留 Vue + Rust + Tauri 技术栈。具体增量与验证见 [实现记录](MULTI_BACKEND_IMPLEMENTATION.md)。
 
 2026-09-14 技术决策更新：用户选择 **Diesel** 作为 Rust 与 SQLite 的业务访问层。P1 增加存储层迁移，新增 API 工作同时遵守此决定；完整交付范围保持不变。
 
@@ -132,11 +132,11 @@ API Key 保存到系统凭据库：Linux Secret Service、macOS Keychain、Windo
 
 ### 5.2 Claude Code headless
 
-优先直接启动官方 CLI，使用流式 JSON 输出，不为 API 用户增加 Node 运行时或常驻 SDK sidecar。按官方 headless 协议解析事件与最终结果，精确记录 session ID；续聊使用指定 ID，不使用“继续最近会话”。[官方 headless 文档](https://code.claude.com/docs/en/headless)
+优先直接启动官方 CLI，使用流式 JSON 输出，不为 API 用户增加 Node 运行时或常驻 SDK sidecar。按官方 headless 协议解析事件与最终结果，精确记录 session ID；续聊从上次成功轮次的指定 ID 创建新分支，不使用“继续最近会话”。失败轮次的分支不会被下一轮恢复。[官方 headless 文档](https://code.claude.com/docs/en/headless)
 
-本机只读检查确认 `Claude Code 2.1.269` 的帮助中存在 `--bare`、`--output-format stream-json`、`--include-partial-messages`、`--tools`、`--disallowedTools` 和 `--resume`；尚未进行实际模型调用。P0 将用目标版本建立脱敏协议 fixture，再确定最低支持版本。
+本机 `Claude Code 2.1.269` 已通过回环服务验证：有效工具/MCP/技能为空、API Key 认证、两轮流式、指定会话分支续聊及服务错误退出。运行时检查所需参数能力，并检查每轮初始化；目前仅该版本有实际 CLI 证据，未进行真实厂商模型调用。
 
-拟采用 bare 模式、明确的纯聊天 system prompt、关闭内置工具并拒绝 MCP 工具。`--bare` 本身不能代替工具禁用；`--tools ""` 也不影响 MCP，必须分别约束并检查有效初始化配置。官方 CLI 参数是实施依据，不通过 prompt 假装完成进程隔离。[官方 CLI 参数](https://code.claude.com/docs/en/cli-reference)
+实现采用 bare / restricted 模式、明确的纯聊天 system prompt、关闭内置工具、技能、hooks 和 MCP 工具。`--bare` 本身不能代替工具禁用；`--tools ""` 也不影响 MCP，必须分别约束并检查有效初始化配置。官方 CLI 参数是实施依据，不通过 prompt 假装完成进程隔离。[官方 CLI 参数](https://code.claude.com/docs/en/cli-reference)
 
 用户文本通过 stdin 传入，使用参数数组启动，不拼接 shell；API Key 仅传给该子进程。使用专用工作目录，避免自动加载用户项目上下文。若组织管理策略或该版本使必需的纯聊天限制无法落实，明确显示该 GUI 接入不可用，并提供直接 Claude API 的配置入口；不绕过权限设置。stderr 独立采集并脱敏，取消和超时必须回收进程。
 

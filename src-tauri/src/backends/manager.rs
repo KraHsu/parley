@@ -1,6 +1,8 @@
 use super::{
+    claude,
     credentials::{CredentialStatus, Credentials},
     http,
+    types::BackendKind,
 };
 use crate::storage::{Storage, StorageState, api::ApiTurn};
 use serde::{Deserialize, Serialize};
@@ -77,6 +79,11 @@ pub struct TurnEvent {
     pub usage: Option<Value>,
     pub error: Option<String>,
     pub notice: Option<String>,
+}
+
+enum Payload {
+    Http { body: Value, clipped: bool },
+    Claude(claude::Request),
 }
 
 struct Publisher {
@@ -232,7 +239,9 @@ pub async fn backend_models(
 ) -> Result<Vec<String>, String> {
     let storage = storage.get()?;
     let profile = storage.backend_profile(&profile_id)?;
-    if !http::supported(profile.config.kind) {
+    if profile.config.kind == BackendKind::ClaudeCode {
+        claude::check(&profile).await?;
+    } else if !http::supported(profile.config.kind) {
         return Err("此后端的模型发现尚未接入。".into());
     }
     let credentials = state.credentials.clone();
@@ -241,7 +250,12 @@ pub async fn backend_models(
         tauri::async_runtime::spawn_blocking(move || credentials.get(&storage, &snapshot))
             .await
             .map_err(|_| "读取凭据失败。".to_owned())??;
-    http::models(&profile, &credential).await
+    let mut discovery = profile;
+    if discovery.config.kind == BackendKind::ClaudeCode {
+        discovery.config.kind = BackendKind::AnthropicMessages;
+        discovery.config.endpoint = "https://api.anthropic.com/v1".into();
+    }
+    http::models(&discovery, &credential).await
 }
 
 #[tauri::command]
@@ -309,7 +323,7 @@ impl BackendState {
         let credentials = self.credentials.clone();
         let pane = request.pane.clone();
         let cancellation = cancelled.clone();
-        let (storage, turn, credential, body, clipped) = storage
+        let (storage, turn, credential, payload) = storage
             .run(move |storage| {
                 if *cancellation.borrow() {
                     return Err("已停止发送。".into());
@@ -318,7 +332,7 @@ impl BackendState {
                 if profile.revision != request.profile_revision || !profile.config.enabled {
                     return Err("服务配置已改变，请重新读取后重试。".into());
                 }
-                if !http::supported(profile.config.kind) {
+                if !http::supported(profile.config.kind) && profile.config.kind != BackendKind::ClaudeCode {
                     return Err("此后端的推理接入尚未实现。".into());
                 }
                 if storage.read(&request.conversation_id)?.pane != request.pane {
@@ -357,13 +371,18 @@ impl BackendState {
                     native: request.native_language,
                     mode: request.mode,
                 };
-                let (body, clipped) =
-                    http::request_body(&turn, &storage.api_history(&turn.conversation_id)?)?;
+                let history = storage.api_history(&turn.conversation_id)?;
+                let payload = if turn.profile.config.kind == BackendKind::ClaudeCode {
+                    Payload::Claude(claude::Request::new(storage.claude_session_directory(&turn)?, &history)?)
+                } else {
+                    let (body, clipped) = http::request_body(&turn, &history)?;
+                    Payload::Http { body, clipped }
+                };
                 if *cancellation.borrow() {
                     return Err("已停止发送。".into());
                 }
                 storage.begin_api_turn(&turn)?;
-                Ok((storage, turn, credential, body, clipped))
+                Ok((storage, turn, credential, payload))
             })
             .await?;
         let receipt = json!({"turnId":turn.id,"messageId":turn.assistant_id});
@@ -376,16 +395,29 @@ impl BackendState {
                 pane: pane.clone(),
                 events: events.clone(),
                 sequence: 0,
-                notice: clipped.then(|| {
+                notice: matches!(&payload, Payload::Http { clipped: true, .. }).then(|| {
                     "历史较长，本轮使用最近的完整轮次；旧记录仍保留在本机。上下文预算为保守估算。"
                         .into()
                 }),
             };
             let outcome = match publisher.publish(&output, "streaming", None).await {
-                Ok(()) => tokio::select! {
-                    biased;
-                    _ = async { if !*cancelled.borrow() { let _ = cancelled.changed().await; } } => Err("已停止回复。".to_owned()),
-                    result = http::generate(&turn,&credential,body,&mut output,|out| publisher.publish(out,"streaming",None)) => result,
+                Ok(()) => match payload {
+                    Payload::Claude(request) => {
+                        claude::generate(
+                            &turn,
+                            &credential,
+                            &request,
+                            &mut output,
+                            cancelled.clone(),
+                            |out| publisher.publish(out, "streaming", None),
+                        )
+                        .await
+                    }
+                    Payload::Http { body, .. } => tokio::select! {
+                        biased;
+                        _ = async { if !*cancelled.borrow() { let _ = cancelled.changed().await; } } => Err("已停止回复。".to_owned()),
+                        result = http::generate(&turn, &credential, body, &mut output, |out| publisher.publish(out, "streaming", None)) => result,
+                    },
                 },
                 Err(error) => Err(error),
             };
@@ -583,6 +615,131 @@ mod tests {
             .await
             .unwrap();
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn claude_cancellation_keeps_api_tutor_live_and_retains_partial_text() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("claude-fixture");
+        let fixture = crate::backends::claude::tests::events("PARLEY_SESSION")
+            .into_iter()
+            .take(8)
+            .map(|e| format!("{e}\n"))
+            .collect::<String>();
+        let script = format!(
+            r#"#!/bin/sh
+if [ "$1" = '--help' ]; then
+  echo '--bare --restricted --tools --strict-mcp-config --include-partial-messages --disable-slash-commands --setting-sources --permission-prompts --fork-session --session-id'
+  exit 0
+fi
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '--session-id' ]; then shift; session="$1"; fi
+  shift
+done
+cat >/dev/null
+sed "s/PARLEY_SESSION/$session/g" <<'PARLEY_FIXTURE'
+{fixture}PARLEY_FIXTURE
+sleep 60
+"#
+        );
+        std::fs::write(&binary, script).unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let storage = StorageState::new(Ok(directory.path().join("workspace.sqlite3")));
+        let backend = BackendState::default();
+        let main = storage
+            .get()
+            .unwrap()
+            .save_backend_profile(SaveProfile {
+                id: None,
+                expected_revision: None,
+                config: ProfileConfig {
+                    name: "Claude fixture".into(),
+                    kind: BackendKind::ClaudeCode,
+                    provider: Provider::Anthropic,
+                    endpoint: "".into(),
+                    binary_path: binary.to_str().unwrap().into(),
+                    enabled: true,
+                },
+            })
+            .unwrap();
+        storage
+            .get()
+            .unwrap()
+            .create_for_backend("main", "main", &main.id)
+            .unwrap();
+        backend
+            .credentials
+            .set(&storage.get().unwrap(), &main, "fixture-key".into(), false)
+            .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+        let (finish, done) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_request(&mut socket).await;
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Tutor\"}\n\n").await.unwrap();
+            done.await.unwrap();
+            let end = json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"Tutor answer"}]}]}});
+            socket
+                .write_all(format!("data: {end}\n\n").as_bytes())
+                .await
+                .unwrap();
+        });
+        let tutor = profile(
+            &storage,
+            &backend,
+            endpoint,
+            BackendKind::OpenaiResponses,
+            "tutor",
+        );
+        let (main_events, mut main_rx) = channel();
+        let (tutor_events, mut tutor_rx) = channel();
+        backend
+            .start(storage.clone(), request(&main, "main"), main_events)
+            .await
+            .unwrap();
+        backend
+            .start(storage.clone(), request(&tutor, "tutor"), tutor_events)
+            .await
+            .unwrap();
+        for rx in [&mut main_rx, &mut tutor_rx] {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let event = rx.recv().await.unwrap();
+                    assert_eq!(event["status"], "streaming");
+                    if !event["text"].as_str().unwrap().is_empty() {
+                        break;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+        }
+        backend.disconnect(Some(&main.id)).await.unwrap();
+        assert_eq!(terminal(&mut main_rx).await["status"], "interrupted");
+        assert!(backend.active.lock().unwrap().contains_key("tutor"));
+        assert_eq!(
+            storage.get().unwrap().read("main").unwrap().messages[1].text,
+            "Bonjour 🌍"
+        );
+        assert!(
+            storage
+                .get()
+                .unwrap()
+                .api_history("main")
+                .unwrap()
+                .is_empty()
+        );
+        finish.send(()).unwrap();
+        assert_eq!(terminal(&mut tutor_rx).await["status"], "complete");
+        idle(&backend, "tutor").await;
+        assert_eq!(
+            storage.get().unwrap().api_history("tutor").unwrap()[0].1,
+            "Tutor answer"
+        );
+        server.await.unwrap();
     }
 
     #[tokio::test]

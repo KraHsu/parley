@@ -31,3 +31,5 @@ pub async fn backend_save_profile(
 }
 
 mod native;
+
+mod claude;

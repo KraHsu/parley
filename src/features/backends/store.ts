@@ -3,7 +3,7 @@ import { defineStore } from 'pinia'
 import { invoke } from '@tauri-apps/api/core'
 import { isDesktop } from '../../shared/desktop'
 import {
-  apiSupported,
+  supportsManagedTurns,
   type BackendProfile,
   type BackendRuntime,
   type CredentialStatus,
@@ -37,7 +37,8 @@ export const useBackendStore = defineStore('backends', () => {
       !!profile &&
       profile.revision === revision &&
       profile.config.enabled &&
-      apiSupported(profile.config.kind) &&
+      supportsManagedTurns(profile.config.kind) &&
+      (profile.config.kind !== 'claude_code' || !!profile.config.binaryPath) &&
       state(id).credential.configured
     )
   }

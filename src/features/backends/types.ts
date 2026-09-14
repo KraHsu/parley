@@ -45,11 +45,12 @@ export interface TurnEvent {
   error: string | null
   notice: string | null
 }
-export const apiSupported = (kind: BackendKind) =>
+export const supportsManagedTurns = (kind: BackendKind) =>
   kind === 'openai_responses' ||
   kind === 'openai_compatible' ||
   kind === 'anthropic_messages' ||
-  kind === 'gemini_interactions'
+  kind === 'gemini_interactions' ||
+  kind === 'claude_code'
 
 export const presets: { label: string; config: ProfileConfig; available: boolean }[] = [
   {
@@ -149,7 +150,7 @@ export const presets: { label: string; config: ProfileConfig; available: boolean
     available: true,
   },
   {
-    label: 'Claude Code（开发中）',
+    label: 'Claude Code（API Key）',
     config: {
       name: 'Claude Code',
       kind: 'claude_code',
@@ -158,6 +159,6 @@ export const presets: { label: string; config: ProfileConfig; available: boolean
       binaryPath: '',
       enabled: true,
     },
-    available: false,
+    available: true,
   },
 ]

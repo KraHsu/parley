@@ -2892,6 +2892,7 @@ dependencies = [
  "futures-util",
  "keyring",
  "language-tags",
+ "libc",
  "libsqlite3-sys",
  "open",
  "reqwest",

@@ -294,7 +294,21 @@ mod tests {
         for path in [&binary, &runtime] {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let output = codex_command(&binary).output().unwrap();
+        // Parallel subprocess tests can briefly inherit a just-written script's
+        // descriptor before exec closes it, producing ETXTBSY on Linux. No child
+        // starts in this case; wait only for that transient fixture condition.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let output = loop {
+            match codex_command(&binary).output() {
+                Err(error)
+                    if error.raw_os_error() == Some(libc::ETXTBSY)
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                result => break result.unwrap(),
+            }
+        };
         assert!(output.status.success());
         assert_eq!(output.stdout, b"runtime found\n");
         std::fs::remove_dir_all(dir).unwrap();

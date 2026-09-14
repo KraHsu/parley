@@ -88,3 +88,22 @@ Diesel 业务存储迁移已完成；P1 的统一后端运行时、流式写入�
 P2 的三种原生 API 已有实现及本地协议测试，真实服务调用和系统凭据库桌面交互仍未验证。模型发现不保证列出的每个模型均支持本项目的文本协议，需用户选择适用模型；兼容厂商的参数适配与逐厂商验证仍按 P3 推进。
 
 P1 的 Codex 多配置运行时与完整工作区 store 拆分、P4/P5 的 Claude Code GUI 与原生终端伴随、P6 的用量展示/跨后端学习来源/备份 v2，以及 P7 桌面验收与发布继续待办。本节点不代表 v0.4.0 已完成。
+
+## 2026-09-14：Claude Code GUI 后端
+
+- 设置页启用 Claude Code 配置，用户选择自己的本机可执行文件及 API Key；主聊和语言助手使用现有通用管理器独立运行。连接检查验证 CLI 参数能力并读取 Anthropic 模型列表，不生成回答。API-only 安装继续不依赖 CLI。
+- 使用官方 `--bare` / `--restricted` / `--tools ""`、空 MCP 配置、禁用技能和 hooks，以及禁止交互权限询问。每轮检查实际 `system/init` 中的工具、MCP、技能、插件、认证来源和权限模式；不符合时停止。[CLI 参数](https://code.claude.com/docs/en/cli-reference)。
+- 子进程仅继承明确列出的系统、运行时和代理环境，API Key 只通过该进程的环境传入。GUI 不继承 OAuth、其他厂商密钥、路由开关、动态加载器或用户 apiKeyHelper。配置与 CLI transcript 放在数据库旁的独立目录，按配置版本、凭据作用域和本地会话分隔；Unix 目录权限为 0700。[bare 模式与认证](https://code.claude.com/docs/en/headless)、[配置目录环境变量](https://code.claude.com/docs/en/env-vars)。
+- 原文通过 stdin 发送，不进入 shell 或命令行参数。每个新 turn 使用自己的 UUID；续聊使用上一次成功记录中的精确 session ID，配合 `--fork-session` 创建本轮分支。失败和中断的分支不参与下次恢复。会话标识由 Diesel 随成功结果保存，无需新增或改写数据迁移。
+- JSONL 按字节增量解析，限制整体与单行大小，处理 Anthropic 内容块及 CLI 最终结果；仅有正文、缺失 result、会话不符、工具请求或非零退出都不能标记成功。正文继续约 50 ms 合并保存。stderr 保留有界尾部，只返回固定诊断分类，不显示原始凭据、厂商响应或学习文本。
+- 使用 `CLAUDE_CODE_MAX_RETRIES=0`，遇到重试事件也立即停止；输出上限 4096，单次 agentic turn 上限为 1。生成超时和取消后回收本轮进程；Unix 使用独立进程组终止后代，Windows 的进程树回收分支尚未原生实测。[官方重试和输出控制](https://code.claude.com/docs/en/env-vars)。
+
+### 验证与剩余范围
+
+- 实际运行本机 `Claude Code 2.1.269`，请求全部发往临时回环 HTTP 服务，使用虚构密钥和临时配置目录。确认 `tools=[]`、`mcp_servers=[]`、`apiKeySource=ANTHROPIC_API_KEY`；两轮输出成功，第二轮真实请求包含第一轮回答并使用新 session 分支；503 测试及时失败，未伪装成成功。
+- 新增自动测试覆盖参数边界、stdin 输入、有效初始化校验、最终结果与退出码、部分正文保留、错误诊断脱敏、取消后子进程停止，以及 Claude Code 主聊取消时 API 助手继续完成。进程后代检查允许内核短暂完成终止信号处理，不将发送信号本身当作停止证据。
+- 回环 CLI 实测入口：`PARLEY_TEST_CLAUDE_BIN=/path/to/claude cargo test --workspace --locked --lib backends::claude::tests::live_cli -- --ignored`。此测试不调用真实服务、不读取官方订阅登录、不产生模型费用。
+
+本轮 Rust **77 项**普通测试、前端 **40 项**测试通过；5 项默认忽略的测试中，单独执行的 Claude CLI 回环实测通过。格式、TypeScript、Clippy（禁止警告）、前端生产构建与 Linux Tauri 调试构建通过。并发子进程测试中遇到的临时脚本 `ETXTBSY` 仅在原有 launcher 测试中做有界等待，不改变原生 Codex 启动行为。
+
+P4 已有可用实现及本机 CLI/回环协议证据，真实 Anthropic 调用、系统密钥库交互、GUI 操作及其他平台进程回收仍待验收。P5 的 Claude 原生 TUI 启动和自动上下文同步尚未实现；现有原生 Codex 启动方式没有扩展。P1 剩余运行时拆分、P3 厂商适配、P6 来源及备份 v2、P7 完整发布仍按原计划推进。

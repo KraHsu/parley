@@ -35,6 +35,31 @@ impl From<CredentialRow> for CredentialReference {
     }
 }
 impl Storage {
+    pub fn claude_session_directory(&self, turn: &ApiTurn) -> Result<PathBuf> {
+        use sha2::{Digest, Sha256};
+        let identity = serde_json::to_vec(&(
+            &turn.profile.id,
+            turn.profile.revision,
+            &turn.auth_scope,
+            &turn.conversation_id,
+        ))
+        .map_err(error)?;
+        let key = format!("{:x}", Sha256::digest(identity));
+        let directory = self
+            .path
+            .parent()
+            .ok_or("数据库目录不可用。")?
+            .join("claude-code")
+            .join(key);
+        std::fs::create_dir_all(&directory).map_err(error)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+                .map_err(error)?;
+        }
+        Ok(directory)
+    }
     pub fn check_profile_revision(&self, id: &str, revision: i64) -> Result<()> {
         let profile = self.backend_profile(id)?;
         if profile.revision != revision || !profile.config.enabled {

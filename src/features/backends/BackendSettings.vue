@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import ConnectionSettings from '../codex/ConnectionSettings.vue'
 import { useChatStore } from '../chat/store'
 import { useBackendStore } from './store'
-import { apiSupported, presets, type BackendProfile, type ProfileConfig } from './types'
+import { supportsManagedTurns, presets, type BackendProfile, type ProfileConfig } from './types'
 import { isDesktop } from '../../shared/desktop'
 
 defineProps<{ tutorOnly?: boolean }>()
@@ -21,7 +21,7 @@ const notice = ref('')
 const showingForm = ref(false)
 const available = computed(() =>
   backends.profiles.filter(
-    (p) => p.config.enabled && (p.id === 'codex-default' || apiSupported(p.config.kind)),
+    (p) => p.config.enabled && (p.id === 'codex-default' || supportsManagedTurns(p.config.kind)),
   ),
 )
 const editable = computed(() => backends.profiles.filter((p) => p.config.kind !== 'codex'))
@@ -103,8 +103,8 @@ function modelChoices(pane: 'main' | 'tutor') {
     <section class="settings-section">
       <h3>模型服务</h3>
       <p class="settings-help">
-        主聊与语言助手可以使用不同服务。API 使用你的服务商 API 额度；Codex
-        使用本机官方登录。连接检查只读取模型列表，不生成回答。
+        主聊与语言助手可以使用不同服务。API 使用你的服务商 API 额度；Codex 使用本机官方登录。Claude
+        Code GUI 使用 API Key。连接检查读取模型列表及 CLI 能力，不生成回答。
       </p>
       <p v-if="!isDesktop()" class="settings-help">
         浏览器仅预览界面，请在桌面应用中配置模型服务。
@@ -176,7 +176,7 @@ function modelChoices(pane: 'main' | 'tutor') {
                 ? '密钥仅本次会话可用'
                 : '待配置密钥'
         }}</span>
-        <p class="settings-help">{{ profile.config.endpoint }}</p>
+        <p class="settings-help">{{ profile.config.endpoint || profile.config.binaryPath }}</p>
         <div class="connection-actions">
           <button class="secondary-button" :disabled="busy" @click="edit(profile)">
             编辑 / 更换密钥
@@ -225,7 +225,21 @@ function modelChoices(pane: 'main' | 'tutor') {
         <label class="settings-field"
           >配置名称<input v-model="config.name" required maxlength="160" :disabled="busy"
         /></label>
-        <label class="settings-field"
+        <label v-if="config.kind === 'claude_code'" class="settings-field">
+          Claude Code 可执行文件路径
+          <input
+            v-model="config.binaryPath"
+            required
+            :disabled="busy"
+            placeholder="本机 claude 的完整路径"
+            spellcheck="false"
+          />
+        </label>
+        <p v-if="config.kind === 'claude_code'" class="settings-help">
+          使用你安装的官方 Claude Code（已验证 2.1.269）。GUI 使用 API Key
+          与独立会话；原生终端保留官方登录。
+        </p>
+        <label v-else class="settings-field"
           >API 服务地址<input
             v-model="config.endpoint"
             required
