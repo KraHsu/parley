@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -32,6 +32,8 @@ if (actual !== version) {
   const output = join(dirname(artifact), `.${basename(artifact)}.tmp`)
   try {
     run('dpkg-deb', ['--raw-extract', artifact, stage])
+    // mkdtemp uses 0700; do not carry that private staging mode into the archive root.
+    chmodSync(stage, 0o755)
     const control = join(stage, 'DEBIAN/control')
     writeFileSync(
       control,
