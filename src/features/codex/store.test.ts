@@ -245,7 +245,7 @@ describe('Codex workspace', () => {
     store.terminalContext = 'assistant: How have you been?'
     await store.send('tutor', '解释当前回复', 'explain')
     expect(mock.invoke).toHaveBeenCalledWith(
-      'codex_send',
+      'backend_send',
       expect.objectContaining({
         request: expect.objectContaining({
           text: '解释当前回复',
@@ -255,7 +255,7 @@ describe('Codex workspace', () => {
     )
     await store.send('main', 'Hello')
     expect(mock.invoke).toHaveBeenCalledWith(
-      'codex_send',
+      'backend_send',
       expect.objectContaining({
         request: expect.objectContaining({ pane: 'main', terminalContext: null }),
       }),
@@ -304,7 +304,7 @@ describe('Codex workspace', () => {
     const store = useCodexStore()
     await store.connect()
     mock.invoke.mockImplementation(async (method: string, args) => {
-      if (method === 'codex_send') throw new Error('quota exceeded')
+      if (method === 'backend_send') throw new Error('quota exceeded')
       return defaultInvoke(method, args)
     })
     await store.send('main', 'My message')
@@ -353,7 +353,7 @@ describe('Codex workspace', () => {
     expect(store.lanes.main.draft).toBe('日本語の下書き')
     expect(store.lanes.main.messages[0]?.text).toBe('途中')
     expect(store.lanes.main.busy).toBe(false)
-    expect(mock.invoke.mock.calls.some((call) => call[0] === 'codex_send')).toBe(false)
+    expect(mock.invoke.mock.calls.some((call) => call[0] === 'backend_send')).toBe(false)
   })
   it('serializes draft writes and flushes the newest text before returning', async () => {
     const store = useCodexStore()
@@ -459,11 +459,7 @@ describe('source navigation', () => {
       pane: 'tutor',
     })
     expect(store.lanes.tutor.messages[0]?.usage).toEqual({ total_tokens: 12 })
-    expect(
-      mock.invoke.mock.calls.some(
-        ([method]) => method === 'codex_send' || method === 'backend_send',
-      ),
-    ).toBe(false)
+    expect(mock.invoke.mock.calls.some(([method]) => method === 'backend_send')).toBe(false)
   })
   it('keeps the word view and draft when the message is gone, without disabling model connections', async () => {
     const store = useCodexStore()
@@ -620,6 +616,9 @@ describe('API conversation routing', () => {
     const request = mock.invoke.mock.calls.find((c) => c[0] === 'backend_send')![1].request
     await store.stop('main')
     expect(mock.invoke).toHaveBeenCalledWith('backend_stop', {
+      backendKind: store.lanes.main.backend.kind,
+      profileId: store.lanes.main.backend.profileId,
+      pane: 'main',
       conversationId: 'main',
       requestId: request.messageId,
     })
@@ -658,17 +657,25 @@ describe('multiple Codex profiles', () => {
     expect(await store.send('main', 'Hello')).toBe(true)
     expect(await store.send('tutor', 'Explain')).toBe(true)
     expect(mock.invoke).toHaveBeenCalledWith(
-      'codex_send',
+      'backend_send',
       expect.objectContaining({
-        profileId: 'codex-a',
-        request: expect.objectContaining({ pane: 'main' }),
+        request: expect.objectContaining({
+          pane: 'main',
+          profileId: 'codex-a',
+          profileRevision: 2,
+          backendKind: 'codex',
+        }),
       }),
     )
     expect(mock.invoke).toHaveBeenCalledWith(
-      'codex_send',
+      'backend_send',
       expect.objectContaining({
-        profileId: 'codex-b',
-        request: expect.objectContaining({ pane: 'tutor' }),
+        request: expect.objectContaining({
+          pane: 'tutor',
+          profileId: 'codex-b',
+          profileRevision: 2,
+          backendKind: 'codex',
+        }),
       }),
     )
     emit(
@@ -698,7 +705,9 @@ describe('multiple Codex profiles', () => {
     emit('item/agentMessage/delta', { pane: 'tutor', itemId: 'same', delta: ' continues' }, 1)
     expect(store.lanes.tutor.messages.at(-1)?.text).toBe('Tutor answer continues')
     await store.stop('tutor')
-    expect(mock.invoke).toHaveBeenCalledWith('codex_stop', {
+    expect(mock.invoke).toHaveBeenCalledWith('backend_stop', {
+      backendKind: 'codex',
+      conversationId: 'tutor',
       pane: 'tutor',
       requestId: expect.any(String),
       profileId: 'codex-b',
@@ -708,11 +717,11 @@ describe('multiple Codex profiles', () => {
     const { store } = await setup()
     await store.send('main', 'Hello')
     await store.send('tutor', 'Explain')
-    const calls = mock.invoke.mock.calls.filter(([method]) => method === 'codex_send')
+    const calls = mock.invoke.mock.calls.filter(([method]) => method === 'backend_send')
     for (const [index, pane] of (['main', 'tutor'] as const).entries()) {
       const args = calls[index]![1]
       const event: TurnEvent = {
-        profileId: args.profileId,
+        profileId: args.request.profileId,
         profileRevision: 2,
         conversationId: pane,
         pane,
@@ -749,7 +758,7 @@ describe('multiple Codex profiles', () => {
   it('accepts an already saved final turn after the connection notice arrives first', async () => {
     const { store, connections } = await setup()
     await store.send('main', 'Hello')
-    const args = mock.invoke.mock.calls.find(([method]) => method === 'codex_send')![1]
+    const args = mock.invoke.mock.calls.find(([method]) => method === 'backend_send')![1]
     const event: TurnEvent = {
       profileId: 'codex-a',
       profileRevision: 2,
@@ -795,7 +804,7 @@ describe('multiple Codex profiles', () => {
     expect(store.isReady('main')).toBe(false)
     expect(store.isReady('tutor')).toBe(true)
     expect(await store.send('main', 'Do not send')).toBe(false)
-    expect(mock.invoke).not.toHaveBeenCalledWith('codex_send', expect.anything())
+    expect(mock.invoke).not.toHaveBeenCalledWith('backend_send', expect.anything())
   })
   it('scopes account, model, limits and login operations to the selected configuration', async () => {
     const { connections } = await setup()

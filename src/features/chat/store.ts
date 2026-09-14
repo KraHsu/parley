@@ -423,17 +423,15 @@ export const useChatStore = defineStore('chat', () => {
           void refreshHistory()
         }
       }
-      if (backend.kind === 'codex')
-        await invoke('codex_send', { request: payload, events, ...codexScope(backend.profileId) })
-      else
-        await invoke('backend_send', {
-          request: {
-            ...payload,
-            profileId: backend.profileId,
-            profileRevision: backend.profileRevision,
-          },
-          events,
-        })
+      await invoke('backend_send', {
+        request: {
+          ...payload,
+          backendKind: backend.kind,
+          profileId: backend.profileId,
+          profileRevision: backend.profileRevision,
+        },
+        events,
+      })
       if (request === lane.request && lane.draft === text) lane.draft = ''
       await flush()
       await refreshHistory()
@@ -456,17 +454,13 @@ export const useChatStore = defineStore('chat', () => {
   async function stop(pane: Pane) {
     try {
       const lane = lanes[pane]
-      if (lane.backend.kind === 'codex')
-        await invoke('codex_stop', {
-          pane,
-          requestId: lane.apiRequestId ?? null,
-          ...codexScope(lane.backend.profileId),
-        })
-      else
-        await invoke('backend_stop', {
-          conversationId: lane.id,
-          requestId: lane.apiRequestId ?? null,
-        })
+      await invoke('backend_stop', {
+        backendKind: lane.backend.kind,
+        profileId: lane.backend.profileId,
+        pane,
+        conversationId: lane.id,
+        requestId: lane.apiRequestId ?? null,
+      })
     } catch (e) {
       lanes[pane].error = describe(e)
     }

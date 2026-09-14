@@ -20,6 +20,7 @@ use tokio::sync::watch;
 
 #[derive(Default)]
 pub struct BackendState {
+    pub codex: crate::codex::CodexState,
     pub credentials: Arc<Credentials>,
     active: Arc<Mutex<HashMap<String, Active>>>,
 }
@@ -27,6 +28,8 @@ struct Active {
     turn_id: String,
     request_id: String,
     profile_id: String,
+    kind: BackendKind,
+    pane: String,
     cancel: watch::Sender<bool>,
     done: watch::Receiver<bool>,
 }
@@ -53,6 +56,7 @@ impl Drop for Reservation {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SendRequest {
+    pub backend_kind: BackendKind,
     pub pane: String,
     pub profile_id: String,
     pub profile_revision: i64,
@@ -73,12 +77,25 @@ enum Payload {
 
 impl BackendState {
     pub fn shutdown(&self) {
+        self.codex.shutdown();
         for active in self.active.lock().unwrap().values() {
             let _ = active.cancel.send(true);
         }
     }
 
-    async fn disconnect(&self, profile: Option<&str>) -> Result<(), String> {
+    pub(crate) async fn disconnect(&self, profile: Option<&str>) -> Result<(), String> {
+        let (codex, requests) = tokio::join!(
+            self.codex.disconnect(profile),
+            self.disconnect_requests(profile),
+        );
+        match (codex, requests) {
+            (Err(a), Err(b)) => Err(format!("{a}\n{b}")),
+            (Err(error), _) | (_, Err(error)) => Err(error),
+            _ => Ok(()),
+        }
+    }
+
+    async fn disconnect_requests(&self, profile: Option<&str>) -> Result<(), String> {
         let receivers: Vec<_> = self
             .active
             .lock()
@@ -168,7 +185,18 @@ pub async fn backend_models(
     profile_id: String,
 ) -> Result<Vec<String>, String> {
     let storage = storage.get()?;
-    let profile = storage.backend_profile(&profile_id)?;
+    let profile = {
+        let store = storage.clone();
+        tauri::async_runtime::spawn_blocking(move || store.backend_profile(&profile_id))
+            .await
+            .map_err(|_| "读取模型服务配置失败。".to_owned())??
+    };
+    if !profile.config.enabled {
+        return Err("模型服务已停用。".into());
+    }
+    if profile.config.kind == BackendKind::Codex {
+        return state.codex.models(&profile.id, profile.revision).await;
+    }
     if profile.config.kind == BackendKind::ClaudeCode {
         claude::check(&profile).await?;
     } else if !http::supported(profile.config.kind) {
@@ -198,7 +226,7 @@ pub async fn backend_send(
     state.start(storage.inner().clone(), request, events).await
 }
 impl BackendState {
-    async fn start(
+    pub(crate) async fn start(
         &self,
         storage: StorageState,
         request: SendRequest,
@@ -225,6 +253,9 @@ impl BackendState {
         {
             return Err("对话请求参数无效或文本过长。".into());
         }
+        if request.backend_kind == BackendKind::Codex {
+            return self.codex.start(request, events).await;
+        }
         let turn_id = uuid::Uuid::new_v4().to_string();
         let (cancel, mut cancelled) = watch::channel(false);
         let (finished, done) = watch::channel(false);
@@ -239,6 +270,8 @@ impl BackendState {
                     turn_id: turn_id.clone(),
                     request_id: request.message_id.clone(),
                     profile_id: request.profile_id.clone(),
+                    kind: request.backend_kind,
+                    pane: request.pane.clone(),
                     cancel,
                     done,
                 },
@@ -259,7 +292,7 @@ impl BackendState {
                     return Err("已停止发送。".into());
                 }
                 let profile = storage.backend_profile(&request.profile_id)?;
-                if profile.revision != request.profile_revision || !profile.config.enabled {
+                if profile.revision != request.profile_revision || !profile.config.enabled || profile.config.kind != request.backend_kind {
                     return Err("服务配置已改变，请重新读取后重试。".into());
                 }
                 if !http::supported(profile.config.kind) && profile.config.kind != BackendKind::ClaudeCode {
@@ -385,17 +418,47 @@ impl BackendState {
 #[tauri::command]
 pub async fn backend_stop(
     state: State<'_, BackendState>,
+    backend_kind: BackendKind,
+    profile_id: String,
+    pane: String,
     conversation_id: String,
     request_id: Option<String>,
 ) -> Result<(), String> {
-    if let Some(active) = state.active.lock().unwrap().get(&conversation_id)
-        && request_id
-            .as_ref()
-            .is_none_or(|id| id == &active.request_id)
-    {
-        let _ = active.cancel.send(true);
+    state
+        .cancel(
+            backend_kind,
+            &profile_id,
+            &pane,
+            &conversation_id,
+            request_id.as_deref(),
+        )
+        .await
+}
+impl BackendState {
+    pub(crate) async fn cancel(
+        &self,
+        kind: BackendKind,
+        profile: &str,
+        pane: &str,
+        conversation: &str,
+        request: Option<&str>,
+    ) -> Result<(), String> {
+        if kind == BackendKind::Codex {
+            return self
+                .codex
+                .cancel(profile, pane, conversation, request)
+                .await;
+        }
+        if let Some(active) = self.active.lock().unwrap().get(conversation)
+            && active.profile_id == profile
+            && active.kind == kind
+            && active.pane == pane
+            && request.is_none_or(|id| id == active.request_id)
+        {
+            let _ = active.cancel.send(true);
+        }
+        Ok(())
     }
-    Ok(())
 }
 #[tauri::command]
 pub async fn backend_disconnect(
@@ -518,6 +581,7 @@ mod tests {
     }
     fn request(profile: &BackendProfile, pane: &str) -> SendRequest {
         SendRequest {
+            backend_kind: profile.config.kind,
             pane: pane.into(),
             profile_id: profile.id.clone(),
             profile_revision: profile.revision,

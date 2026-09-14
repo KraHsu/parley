@@ -336,10 +336,81 @@ impl Client {
 async fn get_client(state: &CodexState, profile_id: Option<&str>) -> Result<Arc<Client>, String> {
     state.get(profile_id.unwrap_or(DEFAULT_CODEX_PROFILE))
 }
+impl CodexState {
+    pub(crate) async fn start(
+        &self,
+        request: crate::backends::manager::SendRequest,
+        events: Channel<crate::chat::TurnEvent>,
+    ) -> Reply {
+        let c = self.get(&request.profile_id)?;
+        if c.profile.profile_revision != request.profile_revision {
+            return Err("Codex 配置已更改，请重新连接后再发送。".into());
+        }
+        turns::send(
+            &c,
+            MessageRequest {
+                terminal_context: request.terminal_context,
+                pane: request.pane,
+                conversation_id: request.conversation_id,
+                message_id: request.message_id,
+                text: request.text,
+                model: request.model,
+                target_language: request.target_language,
+                native_language: request.native_language,
+                mode: request.mode,
+            },
+            events,
+        )
+        .await
+    }
+    pub(crate) async fn cancel(
+        &self,
+        profile: &str,
+        pane: &str,
+        conversation: &str,
+        request: Option<&str>,
+    ) -> Result<(), String> {
+        let c = self.get(profile)?;
+        let index = pane_index(pane)?;
+        // Resolve to the active local request under one lock. A later turn must
+        // not inherit a stop even if it reuses this pane or conversation.
+        let conversation = conversation.to_owned();
+        let request = request.map(String::from);
+        let request = turns::control(&c, move |c| {
+            let lane = c.lanes[index].lock().unwrap();
+            if lane.conversation.as_deref() != Some(&conversation)
+                || request
+                    .as_deref()
+                    .is_some_and(|id| lane.request_id.as_deref() != Some(id))
+            {
+                return Ok(None);
+            }
+            Ok(lane.request_id.clone())
+        })
+        .await?;
+        if let Some(request) = request {
+            stop_request(&c, pane, Some(&request)).await?;
+        }
+        Ok(())
+    }
+    pub(crate) async fn models(&self, profile: &str, revision: i64) -> Result<Vec<String>, String> {
+        let c = self.get(profile)?;
+        if c.profile.profile_revision != revision {
+            return Err("Codex 配置已更改，请重新连接后读取模型。".into());
+        }
+        let models = read_status(&c, "models").await?;
+        Ok(models["models"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|model| model["model"].as_str().map(String::from))
+            .collect())
+    }
+}
 #[tauri::command]
 pub async fn codex_connect(
     app: tauri::AppHandle,
-    state: State<'_, CodexState>,
+    state: State<'_, crate::backends::manager::BackendState>,
     events: Channel<Value>,
     codex_path: String,
     profile_id: Option<String>,
@@ -347,7 +418,7 @@ pub async fn codex_connect(
 ) -> Reply {
     let root = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
     registry::connect(
-        &state,
+        &state.codex,
         app.state::<StorageState>().inner().clone(),
         root,
         events,
@@ -667,17 +738,20 @@ async fn initialize(client: &Client) -> Reply {
     result
 }
 #[tauri::command]
-pub async fn codex_disconnect(state: State<'_, CodexState>, profile_id: Option<String>) -> Reply {
-    state.disconnect(profile_id.as_deref()).await?;
+pub async fn codex_disconnect(
+    state: State<'_, crate::backends::manager::BackendState>,
+    profile_id: Option<String>,
+) -> Reply {
+    state.codex.disconnect(profile_id.as_deref()).await?;
     Ok(Value::Null)
 }
 #[tauri::command]
 pub async fn codex_status(
-    state: State<'_, CodexState>,
+    state: State<'_, crate::backends::manager::BackendState>,
     section: String,
     profile_id: Option<String>,
 ) -> Reply {
-    let c = get_client(&state, profile_id.as_deref()).await?;
+    let c = get_client(&state.codex, profile_id.as_deref()).await?;
     read_status(&c, &section).await
 }
 async fn read_status(c: &Client, section: &str) -> Reply {
@@ -738,30 +812,33 @@ async fn read_status(c: &Client, section: &str) -> Reply {
 }
 
 #[tauri::command]
-pub async fn codex_login(state: State<'_, CodexState>, profile_id: Option<String>) -> Reply {
-    get_client(&state, profile_id.as_deref())
+pub async fn codex_login(
+    state: State<'_, crate::backends::manager::BackendState>,
+    profile_id: Option<String>,
+) -> Reply {
+    get_client(&state.codex, profile_id.as_deref())
         .await?
         .rpc("account/login/start", json!({"type":"chatgpt"}))
         .await
 }
 #[tauri::command]
 pub async fn codex_cancel_login(
-    state: State<'_, CodexState>,
+    state: State<'_, crate::backends::manager::BackendState>,
     login_id: String,
     profile_id: Option<String>,
 ) -> Reply {
-    get_client(&state, profile_id.as_deref())
+    get_client(&state.codex, profile_id.as_deref())
         .await?
         .rpc("account/login/cancel", json!({"loginId":login_id}))
         .await
 }
 #[tauri::command]
 pub async fn codex_open_login(
-    state: State<'_, CodexState>,
+    state: State<'_, crate::backends::manager::BackendState>,
     url: String,
     profile_id: Option<String>,
 ) -> Result<(), String> {
-    get_client(&state, profile_id.as_deref()).await?;
+    get_client(&state.codex, profile_id.as_deref()).await?;
     let parsed = url::Url::parse(&url).map_err(|_| "无效登录地址")?;
     if parsed.scheme() != "https"
         || parsed.host_str() != Some("auth.openai.com")
@@ -775,7 +852,7 @@ pub async fn codex_open_login(
 }
 #[tauri::command]
 pub async fn codex_terminal_context(
-    state: State<'_, CodexState>,
+    state: State<'_, crate::backends::manager::BackendState>,
     options: State<'_, crate::launcher::LaunchOptions>,
     thread_id: Option<String>,
     profile_id: Option<String>,
@@ -784,7 +861,7 @@ pub async fn codex_terminal_context(
         .terminal_cwd
         .as_deref()
         .ok_or("请从 parley-cli 启动终端伴随窗口。")?;
-    let c = get_client(&state, profile_id.as_deref()).await?;
+    let c = get_client(&state.codex, profile_id.as_deref()).await?;
     terminal_context(&c, cwd, thread_id.as_deref()).await
 }
 async fn terminal_context(c: &Client, cwd: &str, thread_id: Option<&str>) -> Reply {
@@ -893,12 +970,12 @@ fn instructions(r: &MessageRequest) -> String {
 }
 #[tauri::command]
 pub async fn codex_send(
-    state: State<'_, CodexState>,
+    state: State<'_, crate::backends::manager::BackendState>,
     request: MessageRequest,
     events: Channel<crate::chat::TurnEvent>,
     profile_id: Option<String>,
 ) -> Reply {
-    let c = get_client(&state, profile_id.as_deref()).await?;
+    let c = get_client(&state.codex, profile_id.as_deref()).await?;
     turns::send(&c, request, events).await
 }
 #[cfg(test)]
@@ -907,12 +984,12 @@ async fn send_message(c: &Arc<Client>, request: MessageRequest) -> Reply {
 }
 #[tauri::command]
 pub async fn codex_stop(
-    state: State<'_, CodexState>,
+    state: State<'_, crate::backends::manager::BackendState>,
     pane: String,
     profile_id: Option<String>,
     request_id: Option<String>,
 ) -> Reply {
-    let c = get_client(&state, profile_id.as_deref()).await?;
+    let c = get_client(&state.codex, profile_id.as_deref()).await?;
     stop_request(&c, &pane, request_id.as_deref()).await
 }
 #[cfg(test)]
@@ -948,11 +1025,11 @@ async fn stop_request(c: &Arc<Client>, pane: &str, request_id: Option<&str>) -> 
 }
 #[tauri::command]
 pub async fn codex_reset(
-    state: State<'_, CodexState>,
+    state: State<'_, crate::backends::manager::BackendState>,
     pane: String,
     profile_id: Option<String>,
 ) -> Reply {
-    let c = get_client(&state, profile_id.as_deref()).await?;
+    let c = get_client(&state.codex, profile_id.as_deref()).await?;
     let index = pane_index(&pane)?;
     turns::control(&c, move |c| {
         let mut lane = c.lanes[index].lock().unwrap();

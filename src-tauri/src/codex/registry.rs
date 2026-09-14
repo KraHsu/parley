@@ -48,7 +48,7 @@ impl CodexState {
             }
         }
     }
-    pub(super) async fn disconnect(&self, id: Option<&str>) -> Result<(), String> {
+    pub(crate) async fn disconnect(&self, id: Option<&str>) -> Result<(), String> {
         let slots: Vec<_> = {
             let slots = self.slots.lock().unwrap();
             slots
@@ -239,6 +239,276 @@ mod tests {
     }
     fn delta(text: &str) -> Value {
         json!({"method":"item/agentMessage/delta","params":{"threadId":"same-upstream-thread","turnId":"same-turn","itemId":"same-item","delta":text}})
+    }
+
+    #[tokio::test]
+    async fn common_runtime_routes_codex_and_api_and_scopes_cancel_and_disconnect() {
+        use crate::backends::{
+            manager::{BackendState, SendRequest},
+            types::{ProfileConfig, Provider},
+        };
+        use crate::chat::TurnEvent;
+        let directory = tempfile::tempdir().unwrap();
+        let storage = StorageState::new(Ok(directory.path().join("runtime.sqlite3")));
+        let store = storage.get().unwrap();
+        store.create("main", "main").unwrap();
+        let codex_profile = store.backend_profile(DEFAULT_CODEX_PROFILE).unwrap();
+        let state = BackendState::default();
+        let (mut c, peer, _) = super::super::tests::test_client();
+        Arc::get_mut(&mut c).unwrap().storage = store.clone();
+        c.exited.store(true, Ordering::SeqCst);
+        c.reader_done.store(true, Ordering::SeqCst);
+        *state
+            .codex
+            .slot(DEFAULT_CODEX_PROFILE)
+            .client
+            .lock()
+            .unwrap() = Some(c.clone());
+        let protocol = c.clone();
+        let server = tokio::spawn(async move {
+            let mut lines = BufReader::new(peer).lines();
+            while let Some(line) = lines.next_line().await.unwrap() {
+                let frame: Value = serde_json::from_str(&line).unwrap();
+                let result = match frame["method"].as_str().unwrap() {
+                    "model/list" => json!({"data":[{"model":"fixture-model"}],"nextCursor":null}),
+                    "account/read" => {
+                        json!({"account":{"type":"chatgpt","email":"fixture@example.invalid"}})
+                    }
+                    "thread/start" => json!({"thread":{"id":"codex-thread"}}),
+                    "turn/start" => {
+                        protocol.incoming(json!({"method":"turn/started","params":{"threadId":"codex-thread","turn":{"id":"codex-turn"}}})).await;
+                        protocol.incoming(json!({"method":"item/agentMessage/delta","params":{"threadId":"codex-thread","turnId":"codex-turn","itemId":"codex-item","delta":"Codex partial"}})).await;
+                        json!({"turn":{"id":"codex-turn"}})
+                    }
+                    "turn/interrupt" => {
+                        assert_eq!(
+                            frame["params"],
+                            json!({"threadId":"codex-thread","turnId":"codex-turn"})
+                        );
+                        protocol.incoming(json!({"method":"turn/completed","params":{"threadId":"codex-thread","turn":{"id":"codex-turn","status":"interrupted"}}})).await;
+                        protocol
+                            .incoming(json!({"id":frame["id"],"result":{}}))
+                            .await;
+                        return;
+                    }
+                    method => panic!("unexpected RPC: {method}"),
+                };
+                protocol
+                    .incoming(json!({"id":frame["id"],"result":result}))
+                    .await;
+            }
+        });
+        assert_eq!(
+            state
+                .codex
+                .models(&codex_profile.id, codex_profile.revision)
+                .await
+                .unwrap(),
+            vec!["fixture-model"]
+        );
+        assert!(
+            state
+                .codex
+                .models(&codex_profile.id, codex_profile.revision + 1)
+                .await
+                .is_err()
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+        let (release, released) = tokio::sync::oneshot::channel();
+        let api_server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut headers = Vec::new();
+            loop {
+                let mut byte = [0];
+                socket.read_exact(&mut byte).await.unwrap();
+                headers.push(byte[0]);
+                assert!(headers.len() < 32000);
+                if headers.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let headers = String::from_utf8(headers).unwrap().to_lowercase();
+            assert!(headers.starts_with("post /v1/responses "));
+            let length: usize = headers
+                .lines()
+                .find_map(|l| l.strip_prefix("content-length: "))
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert!(length < 32000);
+            let mut body = vec![0; length];
+            socket.read_exact(&mut body).await.unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap()["model"],
+                "fixture-model"
+            );
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"API partial\"}\n\n").await.unwrap();
+            released.await.unwrap();
+            let completed = json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"API complete"}]}]}});
+            socket
+                .write_all(format!("data: {completed}\n\n").as_bytes())
+                .await
+                .unwrap();
+        });
+        let api = store
+            .save_backend_profile(SaveProfile {
+                id: None,
+                expected_revision: None,
+                config: ProfileConfig {
+                    name: "API fixture".into(),
+                    kind: BackendKind::OpenaiResponses,
+                    provider: Provider::Openai,
+                    endpoint,
+                    binary_path: String::new(),
+                    enabled: true,
+                },
+            })
+            .unwrap();
+        store.create_for_backend("tutor", "tutor", &api.id).unwrap();
+        state
+            .credentials
+            .set(&store, &api, "fixture-key".into(), false)
+            .unwrap();
+        let request = |profile: &BackendProfile, pane: &str| -> SendRequest {
+            serde_json::from_value(json!({"backendKind":profile.config.kind,"profileId":profile.id,"profileRevision":profile.revision,
+                "pane":pane,"conversationId":pane,"messageId":format!("request-{pane}"),"text":"Explain hello",
+                "model":"fixture-model","targetLanguage":"en","nativeLanguage":"zh-CN","mode":"conversation"})).unwrap()
+        };
+        let (sender, mut output) = tokio::sync::mpsc::unbounded_channel::<TurnEvent>();
+        let channel = Channel::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Json(text) = body {
+                let _ = sender.send(serde_json::from_str(&text).unwrap());
+            }
+            Ok(())
+        });
+        // Neither a stale Codex revision nor a forged API protocol can start a turn.
+        let mut stale = request(&codex_profile, "main");
+        stale.profile_revision += 1;
+        assert!(
+            state
+                .start(storage.clone(), stale, channel.clone())
+                .await
+                .is_err()
+        );
+        let mut wrong_kind = request(&api, "tutor");
+        wrong_kind.backend_kind = BackendKind::AnthropicMessages;
+        assert!(
+            state
+                .start(storage.clone(), wrong_kind, channel.clone())
+                .await
+                .is_err()
+        );
+        assert!(store.read("main").unwrap().messages.is_empty());
+        assert!(store.read("tutor").unwrap().messages.is_empty());
+        let (main, tutor) = tokio::join!(
+            state.start(
+                storage.clone(),
+                request(&codex_profile, "main"),
+                channel.clone()
+            ),
+            state.start(storage.clone(), request(&api, "tutor"), channel),
+        );
+        assert_ne!(main.unwrap()["turnId"], tutor.unwrap()["turnId"]);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            let mut seen = std::collections::HashSet::new();
+            while seen.len() < 2 {
+                let event = output.recv().await.unwrap();
+                if !event.text.is_empty() {
+                    seen.insert(event.pane);
+                }
+            }
+        })
+        .await
+        .unwrap();
+        // Old requests and mismatched pane/conversation/profile scopes have no effect.
+        state
+            .cancel(
+                BackendKind::Codex,
+                &codex_profile.id,
+                "main",
+                "old-conversation",
+                Some("request-main"),
+            )
+            .await
+            .unwrap();
+        state
+            .cancel(
+                BackendKind::Codex,
+                &codex_profile.id,
+                "main",
+                "main",
+                Some("old-request"),
+            )
+            .await
+            .unwrap();
+        for (kind, id, pane, request) in [
+            (
+                BackendKind::OpenaiResponses,
+                "wrong-profile",
+                "tutor",
+                "request-tutor",
+            ),
+            (
+                BackendKind::OpenaiResponses,
+                api.id.as_str(),
+                "main",
+                "request-tutor",
+            ),
+            (
+                BackendKind::OpenaiResponses,
+                api.id.as_str(),
+                "tutor",
+                "old-request",
+            ),
+            (
+                BackendKind::AnthropicMessages,
+                api.id.as_str(),
+                "tutor",
+                "request-tutor",
+            ),
+        ] {
+            state
+                .cancel(kind, id, pane, "tutor", Some(request))
+                .await
+                .unwrap();
+        }
+        state
+            .cancel(
+                BackendKind::Codex,
+                &codex_profile.id,
+                "main",
+                "main",
+                Some("request-main"),
+            )
+            .await
+            .unwrap();
+        server.await.unwrap();
+        assert_eq!(store.read("main").unwrap().status, "interrupted");
+        assert_eq!(
+            store.read("main").unwrap().messages[1].text,
+            "Codex partial"
+        );
+        state.disconnect(Some(&codex_profile.id)).await.unwrap();
+        assert_eq!(store.read("tutor").unwrap().status, "running");
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let event = output.recv().await.unwrap();
+                if event.pane == "tutor" && event.status != "streaming" {
+                    assert_eq!(event.status, "complete");
+                    assert_eq!(event.text, "API complete");
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        api_server.await.unwrap();
+        state.disconnect(None).await.unwrap();
+        assert!(state.codex.get(&codex_profile.id).is_err());
+        assert_eq!(store.read("tutor").unwrap().status, "idle");
     }
 
     #[tokio::test]

@@ -29,14 +29,7 @@ export function useWorkspaceWindow(beforeClose: () => void, afterLoad?: () => Pr
             const chatSaved = workspace.initialized ? await workspace.flush() : true
             return wordsSaved && chatSaved
           },
-          disconnect: async () => {
-            const results = await Promise.allSettled([
-              invoke('codex_disconnect'),
-              invoke('backend_disconnect'),
-            ])
-            const failed = results.find((r) => r.status === 'rejected')
-            if (failed?.status === 'rejected') throw failed.reason
-          },
+          disconnect: () => invoke('backend_disconnect'),
           destroy: () => getCurrentWindow().destroy(),
         },
         discard,

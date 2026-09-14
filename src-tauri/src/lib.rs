@@ -15,7 +15,6 @@ pub fn run() {
     let options = launcher::LaunchOptions::from_environment();
     tauri::Builder::default()
         .manage(options)
-        .manage(codex::CodexState::default())
         .manage(backends::manager::BackendState::default())
         .manage(exchange::ImportState::default())
         .setup(|app| {
@@ -101,7 +100,6 @@ pub fn run() {
         .expect("failed to build Parley")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
-                app.state::<codex::CodexState>().shutdown();
                 app.state::<backends::manager::BackendState>().shutdown();
             }
         });
