@@ -58,11 +58,20 @@ export const useChatStore = defineStore('chat', () => {
   const tutorMode = ref('express')
   const activeView = ref<'conversation' | 'vocabulary'>('conversation')
   const mobilePane = ref<Pane>('main')
+  const navigating = ref(false)
+  const navigationError = ref('')
+  const sourceFocus = ref<{
+    pane: Pane
+    conversationId: string
+    messageId: string
+    request: number
+  } | null>(null)
+  let sourceFocusRequest = 0
   const saving = ref(false)
   const closing = ref(false)
   const workspaceReady = computed(() => initialized.value && !storageError.value && !closing.value)
   function isReady(pane: Pane) {
-    if (!workspaceReady.value) return false
+    if (!workspaceReady.value || navigating.value) return false
     const binding = lanes[pane].backend
     return binding.profileId === 'codex-default'
       ? connection.ready
@@ -148,6 +157,7 @@ export const useChatStore = defineStore('chat', () => {
   )
   function adopt(pane: Pane, conversation: Conversation, restoreSettings = false) {
     applying = true
+    if (sourceFocus.value?.pane === pane) sourceFocus.value = null
     Object.assign(lanes[pane], emptyLane(), {
       id: conversation.id,
       title: conversation.title,
@@ -246,28 +256,58 @@ export const useChatStore = defineStore('chat', () => {
       storageError.value = describe(e)
     }
   }
-  async function selectConversation(id: string) {
+  async function selectConversation(id: string, messageId?: string): Promise<boolean> {
+    if (navigating.value || !initialized.value || closing.value) return false
     const entry = history.value.find((item) => item.id === id)
-    if (!entry || lanes[entry.pane].busy || !(await flush())) return
+    navigationError.value = ''
+    if (entry && lanes[entry.pane].busy) {
+      navigationError.value = '请先停止该面板中的回复，再打开原会话。'
+      return false
+    }
+    navigating.value = true
     try {
-      adopt(entry.pane, await invoke<Conversation>('storage_read', { id }), true)
+      if (!(await flush())) return false
+      const conversation = await invoke<Conversation>('storage_read', { id })
+      if (conversation.id !== id || !['main', 'tutor'].includes(conversation.pane))
+        throw new Error('无法确认原会话，原句快照仍可查看。')
+      if (messageId && !conversation.messages.some((message) => message.id === messageId))
+        throw new Error('原消息已不存在，原句快照仍可查看。')
+      if (lanes[conversation.pane].busy) throw new Error('请先停止该面板中的回复，再打开原会话。')
+      if (closing.value) return false
+      // Reading history can be slow; also save anything typed while it was loading.
+      if (!(await flush())) return false
+      adopt(conversation.pane, conversation, true)
       activeView.value = 'conversation'
-      mobilePane.value = entry.pane
-      await flush()
+      mobilePane.value = conversation.pane
+      if (messageId)
+        sourceFocus.value = {
+          pane: conversation.pane,
+          conversationId: id,
+          messageId,
+          request: ++sourceFocusRequest,
+        }
+      return await flush()
     } catch (e) {
-      storageError.value = describe(e)
+      navigationError.value = describe(e)
+      return false
+    } finally {
+      navigating.value = false
     }
   }
   async function deleteConversation(id: string) {
     const entry = history.value.find((item) => item.id === id)
-    if (!entry || lanes[entry.pane].busy || !(await flush())) return
+    if (navigating.value || closing.value || !entry || lanes[entry.pane].busy) return
+    navigating.value = true
     try {
-      if (lanes[entry.pane].id === id) await reset(entry.pane)
+      if (!(await flush())) return
+      if (lanes[entry.pane].id === id) await resetLane(entry.pane)
       if (lanes[entry.pane].id === id) return
       await invoke('storage_delete', { id })
       await refreshHistory()
     } catch (e) {
       storageError.value = describe(e)
+    } finally {
+      navigating.value = false
     }
   }
   async function retryStorage() {
@@ -404,7 +444,8 @@ export const useChatStore = defineStore('chat', () => {
       lane.draft = draft
       if (!(await flush())) return false
     }
-    if (lane.busy) return false
+    if (lane.busy || !isReady(pane)) return false
+    if (sourceFocus.value?.pane === pane) sourceFocus.value = null
     lane.vocabularyTarget = answerSnapshot
     lane.signature = signature
     lane.error = ''
@@ -460,7 +501,7 @@ export const useChatStore = defineStore('chat', () => {
           }
           answer.text = event.text
           answer.status = event.status
-          answer.usage = event.usage ?? undefined
+          if (event.usage) answer.usage = event.usage
           const user = lane.messages.find((m) => m.id === messageId)
           if (user) user.status = 'complete'
           if (event.error) lane.error = event.error
@@ -513,20 +554,28 @@ export const useChatStore = defineStore('chat', () => {
       lanes[pane].error = describe(e)
     }
   }
+  async function resetLane(pane: Pane) {
+    if (connected.value && lanes[pane].backend.profileId === 'codex-default')
+      await invoke('codex_reset', { pane })
+    const conversation = await create(pane)
+    if (!(await flush()) || closing.value) return
+    adopt(pane, conversation)
+    await flush()
+    await refreshHistory()
+  }
   async function reset(pane: Pane) {
-    if (lanes[pane].busy || !initialized.value || !(await flush())) return
+    if (navigating.value || closing.value || lanes[pane].busy || !initialized.value) return
+    navigating.value = true
     try {
-      if (connected.value && lanes[pane].backend.profileId === 'codex-default')
-        await invoke('codex_reset', { pane })
-      adopt(pane, await create(pane))
-      await flush()
-      await refreshHistory()
+      if (await flush()) await resetLane(pane)
     } catch (e) {
       storageError.value = describe(e)
+    } finally {
+      navigating.value = false
     }
   }
   async function selectBackend(pane: Pane, profileId: string) {
-    if (!initialized.value || lanes[pane].busy || !(await flush())) return
+    if (navigating.value || closing.value || !initialized.value || lanes[pane].busy) return
     const profile = backends.profiles.find((p) => p.id === profileId && p.config.enabled)
     if (!profile) return
     if (
@@ -534,10 +583,14 @@ export const useChatStore = defineStore('chat', () => {
       profile.revision === lanes[pane].backend.profileRevision
     )
       return
+    navigating.value = true
     try {
-      const draft = lanes[pane].draft
+      if (!(await flush())) return
       const changing = profileId !== lanes[pane].backend.profileId
-      adopt(pane, await create(pane, profileId))
+      const conversation = await create(pane, profileId)
+      if (!(await flush()) || closing.value) return
+      const draft = lanes[pane].draft
+      adopt(pane, conversation)
       lanes[pane].draft = draft
       if (changing) {
         const fallback =
@@ -551,6 +604,8 @@ export const useChatStore = defineStore('chat', () => {
       await refreshHistory()
     } catch (e) {
       lanes[pane].error = describe(e)
+    } finally {
+      navigating.value = false
     }
   }
   return {
@@ -568,6 +623,9 @@ export const useChatStore = defineStore('chat', () => {
     flush,
     refreshHistory,
     selectConversation,
+    navigating,
+    navigationError,
+    sourceFocus,
     deleteConversation,
     retryStorage,
     connected,

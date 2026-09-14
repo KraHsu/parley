@@ -104,6 +104,8 @@ impl Default for Preferences {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Value>,
     pub id: String,
     pub role: String,
     pub text: String,

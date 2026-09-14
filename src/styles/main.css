@@ -1674,3 +1674,27 @@ textarea::-webkit-scrollbar-thumb {
   font-size: 10px;
   color: var(--muted);
 }
+
+.chat-message.source-message {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  scroll-margin-block: 24px;
+}
+.message-usage {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.source-conversation {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.source-conversation > .scroll-region {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px;
+}

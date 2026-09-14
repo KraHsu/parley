@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useBackendStore } from './features/backends/store'
+import MessageList from './features/codex/MessageList.vue'
 import TutorPanel from './features/tutor/TutorPanel.vue'
 import TerminalContext from './features/terminal/TerminalContext.vue'
 import VocabularyPanel from './features/vocabulary/VocabularyPanel.vue'
@@ -46,6 +47,12 @@ const { codex, closeError, attemptClose } = useWorkspaceWindow(
     else if (!codex.isReady('tutor')) dialog.value?.showModal()
   },
 )
+watch(
+  () => codex.sourceFocus,
+  (focus) => {
+    if (focus) view.value = focus.pane === 'tutor' ? 'tutor' : 'source-main'
+  },
+)
 const assistantLabel = computed(() =>
   codex.lanes.tutor.backend.profileId === 'codex-default'
     ? codex.label
@@ -76,6 +83,10 @@ const assistantLabel = computed(() =>
       <button class="text-button" @click="dialog?.showModal()">打开连接设置</button>
     </div>
     <div v-if="codex.closing" class="storage-banner" role="status">正在保存并关闭…</div>
+    <div v-if="codex.navigationError" class="storage-banner" role="alert">
+      {{ codex.navigationError }}
+      <button class="text-button" @click="codex.navigationError = ''">关闭提示</button>
+    </div>
     <div v-if="closeError" class="storage-banner" role="alert">
       {{ closeError }}
       <button class="text-button" :disabled="codex.closing" @click="attemptClose()">
@@ -110,6 +121,23 @@ const assistantLabel = computed(() =>
       :backend="terminalBackend"
     />
     <main class="tutor-app-body">
+      <section
+        v-if="view === 'source-main'"
+        class="content-panel source-conversation"
+        aria-label="原对话"
+      >
+        <header class="panel-toolbar">
+          <h2>原对话</h2>
+          <button class="text-button" @click="showWords('words')">返回词句</button>
+        </header>
+        <div class="scroll-region" tabindex="0" aria-label="原对话消息">
+          <MessageList
+            pane="main"
+            :messages="codex.lanes.main.messages"
+            :busy="codex.lanes.main.busy"
+          />
+        </div>
+      </section>
       <TutorPanel v-show="view === 'tutor'" /><VocabularyPanel
         companion
         v-show="view === 'vocabulary'"

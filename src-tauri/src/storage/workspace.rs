@@ -64,14 +64,18 @@ struct MessageRow {
     text: String,
     status: String,
 }
-impl From<MessageRow> for Message {
-    fn from(row: MessageRow) -> Self {
-        Self {
+impl TryFrom<(MessageRow, Option<String>)> for Message {
+    type Error = super::typed::DbError;
+    fn try_from((row, usage): (MessageRow, Option<String>)) -> DbResult<Self> {
+        Ok(Self {
+            usage: usage
+                .map(|s| serde_json::from_str(&s).map_err(error))
+                .transpose()?,
             id: row.id,
             role: row.role,
             text: row.text,
             status: row.status,
-        }
+        })
     }
 }
 
@@ -196,14 +200,20 @@ impl Storage {
     pub fn read(&self, id: &str) -> Result<Conversation> {
         let mut conversation = self.read_metadata(id)?;
         conversation.messages = self.typed(|db| {
-            Ok(m::table
+            m::table
+                .left_join(
+                    t::table.on(t::conversation_id
+                        .eq(m::conversation_id)
+                        .and(t::assistant_message_id.eq(m::id))
+                        .and(m::role.eq("assistant"))),
+                )
                 .filter(m::conversation_id.eq(id))
                 .order(m::sequence)
-                .select(MessageRow::as_select())
-                .load::<MessageRow>(db)?
+                .select((MessageRow::as_select(), t::usage.nullable()))
+                .load::<(MessageRow, Option<String>)>(db)?
                 .into_iter()
-                .map(Into::into)
-                .collect())
+                .map(TryInto::try_into)
+                .collect()
         })?;
         Ok(conversation)
     }

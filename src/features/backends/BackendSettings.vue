@@ -117,7 +117,7 @@ function modelChoices(pane: 'main' | 'tutor') {
           {{ pane === 'main' ? '主聊服务' : '语言助手服务' }}
           <select
             :value="chat.lanes[pane].backend.profileId"
-            :disabled="!chat.initialized || chat.lanes[pane].busy"
+            :disabled="!chat.initialized || chat.lanes[pane].busy || chat.navigating"
             @change="select(pane, $event)"
           >
             <option
@@ -137,7 +137,7 @@ function modelChoices(pane: 'main' | 'tutor') {
           <input
             :value="pane === 'main' ? chat.mainModel : chat.tutorModel"
             :list="`models-${pane}`"
-            :disabled="chat.lanes[pane].busy"
+            :disabled="chat.lanes[pane].busy || chat.navigating"
             placeholder="读取模型列表，或填写服务商提供的模型 ID"
             autocomplete="off"
             spellcheck="false"
@@ -155,7 +155,7 @@ function modelChoices(pane: 'main' | 'tutor') {
           此会话使用旧配置。
           <button
             class="secondary-button"
-            :disabled="chat.lanes[pane].busy"
+            :disabled="chat.lanes[pane].busy || chat.navigating"
             @click="chat.selectBackend(pane, chat.lanes[pane].backend.profileId)"
           >
             使用新配置开始对话

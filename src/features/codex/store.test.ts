@@ -436,6 +436,116 @@ describe('Codex workspace', () => {
   })
 })
 
+describe('source navigation', () => {
+  it('opens an exact saved message without relying on the history list and restores usage', async () => {
+    const store = useCodexStore()
+    await store.initializeWorkspace()
+    const old = conversation('not-in-history', 'tutor')
+    old.messages = [
+      { id: 'source-message', role: 'assistant', text: 'original', usage: { total_tokens: 12 } },
+    ]
+    mock.invoke.mockImplementation(async (method: string, args) =>
+      method === 'storage_read' ? old : defaultInvoke(method, args),
+    )
+    store.activeView = 'vocabulary'
+    expect(await store.selectConversation(old.id, 'source-message')).toBe(true)
+    expect(store.lanes.tutor.id).toBe(old.id)
+    expect(store.mobilePane).toBe('tutor')
+    expect(store.activeView).toBe('conversation')
+    expect(store.sourceFocus).toMatchObject({
+      conversationId: old.id,
+      messageId: 'source-message',
+      pane: 'tutor',
+    })
+    expect(store.lanes.tutor.messages[0]?.usage).toEqual({ total_tokens: 12 })
+    expect(
+      mock.invoke.mock.calls.some(
+        ([method]) => method === 'codex_send' || method === 'backend_send',
+      ),
+    ).toBe(false)
+  })
+  it('keeps the word view and draft when the message is gone, without disabling model connections', async () => {
+    const store = useCodexStore()
+    await store.initializeWorkspace()
+    store.activeView = 'vocabulary'
+    store.lanes.main.draft = 'keep typing'
+    expect(await store.selectConversation('older', 'missing')).toBe(false)
+    expect(store.navigationError).toContain('原消息已不存在')
+    expect(store.storageError).toBe('')
+    expect(store.activeView).toBe('vocabulary')
+    expect(store.lanes.main.id).toBe('main')
+    expect(store.lanes.main.draft).toBe('keep typing')
+    expect(store.sourceFocus).toBeNull()
+    expect(store.navigating).toBe(false)
+  })
+  it('saves text entered during a slow read and excludes overlapping navigation and sends', async () => {
+    const store = useCodexStore()
+    await store.connect()
+    const old = conversation('older', 'main')
+    old.messages = [{ id: 'message', role: 'assistant', text: 'original' }]
+    let release!: (value: Conversation) => void
+    const pending = new Promise<Conversation>((resolve) => {
+      release = resolve
+    })
+    const writes: string[] = []
+    mock.invoke.mockImplementation(async (method: string, args) => {
+      if (method === 'storage_read') return pending
+      if (method === 'storage_save')
+        writes.push(args.drafts.find((d: { id: string }) => d.id === 'main')?.text ?? '')
+      return defaultInvoke(method, args)
+    })
+    const navigating = store.selectConversation('older', 'message')
+    await vi.waitFor(() =>
+      expect(mock.invoke.mock.calls.some(([method]) => method === 'storage_read')).toBe(true),
+    )
+    store.lanes.main.draft = 'typed during read'
+    expect(await store.selectConversation('another')).toBe(false)
+    expect(await store.send('main', 'do not send')).toBe(false)
+    release(old)
+    expect(await navigating).toBe(true)
+    expect(writes).toContain('typed during read')
+    expect(store.lanes.main.id).toBe('older')
+    expect(store.navigating).toBe(false)
+  })
+  it('serializes a slow new conversation with source navigation and preserves late drafts', async () => {
+    const store = useCodexStore()
+    await store.initializeWorkspace()
+    let release!: (value: Conversation) => void
+    const pending = new Promise<Conversation>((resolve) => {
+      release = resolve
+    })
+    const writes: string[] = []
+    mock.invoke.mockImplementation(async (method: string, args) => {
+      if (method === 'storage_create') return pending
+      if (method === 'storage_save')
+        writes.push(args.drafts.find((d: { id: string }) => d.id === 'main')?.text ?? '')
+      return defaultInvoke(method, args)
+    })
+    const reset = store.reset('main')
+    await vi.waitFor(() =>
+      expect(mock.invoke.mock.calls.some(([method]) => method === 'storage_create')).toBe(true),
+    )
+    store.lanes.main.draft = 'saved on previous conversation'
+    expect(await store.selectConversation('source', 'message')).toBe(false)
+    release(conversation('new', 'main'))
+    await reset
+    expect(writes).toContain('saved on previous conversation')
+    expect(store.lanes.main.id).toBe('new')
+    expect(store.navigating).toBe(false)
+  })
+  it('does not replace a generating lane and lets the other lane finish untouched', async () => {
+    const store = useCodexStore()
+    await store.initializeWorkspace()
+    store.lanes.tutor.busy = true
+    store.lanes.tutor.messages = [{ id: 'running', role: 'assistant', text: 'partial' }]
+    expect(await store.selectConversation('tutor', 'running')).toBe(false)
+    expect(store.navigationError).toContain('停止')
+    expect(await store.selectConversation('main')).toBe(true)
+    expect(store.lanes.tutor.busy).toBe(true)
+    expect(store.lanes.tutor.messages[0]?.text).toBe('partial')
+  })
+})
+
 describe('API conversation routing', () => {
   async function setup() {
     const store = useCodexStore()
@@ -475,7 +585,7 @@ describe('API conversation routing', () => {
       sequence: 2,
       status: 'streaming',
       text: 'API answer',
-      usage: null,
+      usage: { input_tokens: 10, output_tokens: 2 },
       error: null,
       notice: null,
     }
@@ -490,9 +600,16 @@ describe('API conversation routing', () => {
     })
     expect(store.lanes.main.messages.at(-1)?.text).toBe('API answer')
     expect(store.lanes.tutor.messages.at(-1)?.text).toBe('Codex answer')
-    call.events.onmessage({ ...event, sequence: 3, status: 'complete', text: 'API final' })
+    call.events.onmessage({
+      ...event,
+      sequence: 3,
+      status: 'complete',
+      text: 'API final',
+      usage: null,
+    })
     call.events.onmessage({ ...event, sequence: 4, text: 'late delta' })
     expect(store.lanes.main.messages.at(-1)?.text).toBe('API final')
+    expect(store.lanes.main.messages.at(-1)?.usage).toEqual({ input_tokens: 10, output_tokens: 2 })
     expect(store.lanes.main.busy).toBe(false)
     expect(store.lanes.tutor.busy).toBe(true)
   })

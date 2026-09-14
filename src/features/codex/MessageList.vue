@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
+import { formatUsage } from '../chat/usage'
 import StudyText from '../vocabulary/StudyText.vue'
 import { useChatStore } from '../chat/store'
 import { useSettingsStore } from '../settings/store'
@@ -9,12 +10,34 @@ const codex = useChatStore()
 const settings = useSettingsStore()
 const conversation = computed(() => codex.history.find((c) => c.id === codex.lanes[props.pane].id))
 const root = ref<HTMLElement>()
+const focusedMessage = computed(() => {
+  const focus = codex.sourceFocus
+  return focus?.pane === props.pane && focus.conversationId === codex.lanes[props.pane].id
+    ? focus.messageId
+    : null
+})
+watch(
+  () => [codex.sourceFocus?.request, codex.lanes[props.pane].id],
+  async () => {
+    const messageId = focusedMessage.value
+    if (!messageId) return
+    await nextTick()
+    if (focusedMessage.value !== messageId) return
+    const article = Array.from(
+      root.value?.querySelectorAll<HTMLElement>('[data-message-id]') ?? [],
+    ).find((element) => element.dataset.messageId === messageId)
+    article?.scrollIntoView({ block: 'center' })
+    article?.focus({ preventScroll: true })
+  },
+  { immediate: true, flush: 'post' },
+)
+
 watch(
   () => [props.messages.length, props.messages.at(-1)?.text, props.busy],
   async () => {
     const scroller = root.value?.closest('.scroll-region')
     if (!scroller) return
-    if (window.getSelection()?.toString()) return
+    if (window.getSelection()?.toString() || focusedMessage.value) return
     const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120
     await nextTick()
     if (nearBottom) scroller.scrollTop = scroller.scrollHeight
@@ -27,7 +50,9 @@ watch(
       v-for="message in messages"
       :key="message.id"
       class="chat-message"
-      :class="`message-${message.role}`"
+      :class="[`message-${message.role}`, { 'source-message': message.id === focusedMessage }]"
+      :data-message-id="message.id"
+      tabindex="-1"
     >
       <span class="message-author">{{
         message.role === 'user' ? '你' : message.role === 'assistant' ? '助手' : '新会话'
@@ -50,6 +75,15 @@ watch(
         }"
       />
       <p v-else dir="auto">{{ message.text }}</p>
+      <small
+        v-if="
+          message.role === 'assistant' &&
+          (message.usage || (!busy && codex.lanes[pane].backend.kind !== 'codex'))
+        "
+        class="message-usage"
+        aria-label="服务返回的 token 用量"
+        >{{ formatUsage(message.usage) || '服务未提供用量' }}</small
+      >
       <small
         v-if="message.status === 'interrupted' || message.status === 'failed'"
         class="message-state"

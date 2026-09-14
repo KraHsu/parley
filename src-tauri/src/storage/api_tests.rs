@@ -223,3 +223,38 @@ fn api_restart_keeps_partial_text_and_excludes_it_from_continuation() {
     assert_eq!(saved.messages[1].status, "interrupted");
     assert!(s.api_history("api").unwrap().is_empty());
 }
+
+#[test]
+fn usage_reopens_with_only_its_own_assistant_even_when_upstream_ids_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("usage.sqlite3");
+    let first = json!({"input_tokens":10,"output_tokens":3,"total_tokens":13});
+    let second = json!({"prompt_tokens":20,"completion_tokens":5,"total_tokens":25});
+    {
+        let s = Storage::open(&path).unwrap();
+        let a = turn(&s, "first", "main");
+        let b = turn(&s, "second", "tutor");
+        assert_eq!(a.assistant_id, b.assistant_id);
+        s.begin_api_turn(&a).unwrap();
+        s.begin_api_turn(&b).unwrap();
+        s.update_api_turn(&a, 1, "done", "complete", Some(&first), None)
+            .unwrap();
+        s.update_api_turn(&b, 1, "partial", "streaming", Some(&second), None)
+            .unwrap();
+        // A terminal update without counters must keep already reported usage.
+        s.update_api_turn(&b, 2, "partial", "interrupted", None, None)
+            .unwrap();
+        s.create("legacy", "main").unwrap();
+    }
+    let s = Storage::open(&path).unwrap();
+    for (id, expected) in [("first", first), ("second", second)] {
+        let restored = s.read(id).unwrap();
+        assert_eq!(restored.messages.len(), 2);
+        assert!(restored.messages[0].usage.is_none());
+        assert_eq!(restored.messages[1].usage.as_ref(), Some(&expected));
+        let json = serde_json::to_value(&restored).unwrap();
+        assert!(json["messages"][0].get("usage").is_none());
+        assert_eq!(json["messages"][1]["usage"], expected);
+    }
+    assert!(s.read("legacy").unwrap().messages.is_empty());
+}

@@ -68,7 +68,7 @@ function onKeydown(event: KeyboardEvent) {
       <h2 id="tutor-title">语言助手</h2>
       <button
         class="text-button"
-        :disabled="lane.busy || !codex.initialized"
+        :disabled="lane.busy || !codex.initialized || codex.navigating"
         @click="codex.reset('tutor')"
       >
         重置

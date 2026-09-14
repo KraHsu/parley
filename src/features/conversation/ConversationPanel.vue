@@ -94,7 +94,7 @@ function onKeydown(event: KeyboardEvent) {
       </h1>
       <button
         class="text-button"
-        :disabled="lane.busy || !codex.initialized"
+        :disabled="lane.busy || !codex.initialized || codex.navigating"
         @click="codex.reset('main')"
       >
         新对话

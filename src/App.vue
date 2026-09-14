@@ -103,7 +103,7 @@ async function checkRuntime() {
             >
               <button
                 class="history-open"
-                :disabled="codex.lanes[entry.pane].busy"
+                :disabled="codex.lanes[entry.pane].busy || codex.navigating"
                 @click="codex.selectConversation(entry.id)"
                 :title="entry.title"
               >
@@ -115,7 +115,7 @@ async function checkRuntime() {
               </button>
               <button
                 class="history-delete text-button"
-                :disabled="codex.lanes[entry.pane].busy"
+                :disabled="codex.lanes[entry.pane].busy || codex.navigating"
                 :aria-label="`删除${entry.title}`"
                 @click="deleteHistory(entry.id)"
               >
@@ -177,6 +177,10 @@ async function checkRuntime() {
         </button>
       </div>
       <div v-if="codex.closing" class="storage-banner" role="status">正在保存并关闭…</div>
+      <div v-if="codex.navigationError" class="storage-banner" role="alert">
+        {{ codex.navigationError }}
+        <button class="text-button" @click="codex.navigationError = ''">关闭提示</button>
+      </div>
       <div v-if="closeError" class="storage-banner" role="alert">
         {{ closeError }}
         <button class="text-button" :disabled="codex.closing" @click="attemptClose()">
