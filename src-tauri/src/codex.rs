@@ -1,6 +1,7 @@
 //! A narrow, local stdio client for the official Codex App Server.
 use crate::backends::types::{BackendKind, ConversationBackend, DEFAULT_CODEX_PROFILE};
 mod registry;
+mod stream;
 mod turns;
 use crate::storage::{Storage, StorageState};
 pub use registry::CodexState;
@@ -74,6 +75,7 @@ struct Client {
     transport_error: Mutex<Option<String>>,
     exited: AtomicBool,
     reader_done: AtomicBool,
+    notifications_done: AtomicBool,
     exit_notify: Arc<Notify>,
     storage_done: Arc<AtomicBool>,
     events: Channel<Value>,
@@ -144,6 +146,7 @@ impl Client {
                 if self.exited.load(Ordering::SeqCst)
                     && self.reader_done.load(Ordering::SeqCst)
                     && self.storage_done.load(Ordering::SeqCst)
+                    && self.notifications_done.load(Ordering::SeqCst)
                 {
                     break;
                 }
@@ -242,9 +245,10 @@ impl Client {
             let client = self.clone();
             let method = method.to_owned();
             let params = value["params"].clone();
-            let result =
-                tauri::async_runtime::spawn_blocking(move || client.notification(&method, &params))
-                    .await;
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                client.notification(&method, &params, false)
+            })
+            .await;
             if let Err(error) = result.unwrap_or_else(|_| Err("Codex 事件保存任务失败。".into()))
             {
                 self.emit("connection/notice", json!({"message":error}));
@@ -264,31 +268,38 @@ impl Client {
             let _ = sender.send(result);
         }
     }
-    fn notification(&self, method: &str, params: &Value) -> Result<(), String> {
+    fn notification(&self, method: &str, params: &Value, deferred: bool) -> Result<(), String> {
         let _notifications = self.notifications.lock().unwrap();
         if !self.alive.load(Ordering::SeqCst) {
             return Ok(());
         }
         if let Some(thread) = params["threadId"].as_str() {
             for lane in self.lanes.iter() {
-                let mut lane = lane.lock().unwrap();
-                if !lane.active || lane.thread.as_deref() != Some(thread) {
-                    continue;
-                }
-                if let Some(publication) = &mut lane.publication {
-                    let finished = match publication.accept(method, params) {
-                        Ok(finished) => finished,
-                        Err(error) => {
-                            let _ = publication.publish("failed", Some(error.clone()));
-                            return Err(error);
-                        }
+                // Never hold the control-state lock during Diesel operations.
+                let publication = {
+                    let mut lane = lane.lock().unwrap();
+                    if !lane.active || lane.thread.as_deref() != Some(thread) {
+                        continue;
+                    }
+                    lane.publication.take()
+                };
+                if let Some(mut publication) = publication {
+                    let result = if deferred {
+                        publication.accept_deferred(method, params)
+                    } else {
+                        publication.accept(method, params)
                     };
-                    if finished {
+                    if let Err(error) = &result {
+                        let _ = publication.publish("failed", Some(error.clone()));
+                    }
+                    let mut lane = lane.lock().unwrap();
+                    lane.turn = publication.remote_turn();
+                    if matches!(result, Ok(true)) {
                         lane.active = false;
                         lane.turn = None;
-                    } else if method == "turn/started" {
-                        lane.turn = params["turn"]["id"].as_str().map(String::from);
                     }
+                    lane.publication = Some(publication);
+                    result?;
                 }
             }
         }
@@ -297,6 +308,27 @@ impl Client {
             "account/login/completed" | "account/updated" | "account/rateLimits/updated"
         ) {
             self.emit(method, params.clone());
+        }
+        Ok(())
+    }
+    fn flush_notifications(&self) -> Result<(), String> {
+        let _notifications = self.notifications.lock().unwrap();
+        if !self.alive.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        for lane in self.lanes.iter() {
+            let publication = {
+                let mut lane = lane.lock().unwrap();
+                if !lane.active {
+                    continue;
+                }
+                lane.publication.take()
+            };
+            if let Some(mut publication) = publication {
+                let result = publication.flush();
+                lane.lock().unwrap().publication = Some(publication);
+                result?;
+            }
         }
         Ok(())
     }
@@ -440,6 +472,7 @@ fn supervise(
         transport_error: Mutex::new(None),
         exited: AtomicBool::new(false),
         reader_done: AtomicBool::new(false),
+        notifications_done: AtomicBool::new(false),
         exit_notify: Arc::new(Notify::new()),
         storage_done: Arc::new(AtomicBool::new(false)),
         events,
@@ -449,27 +482,40 @@ fn supervise(
         profile,
     });
     client.emit("connection/notice", json!({"message":runtime}));
+    let (queue, receiver) = stream::queue();
+    let notifications = client.clone();
+    let notification_task =
+        tauri::async_runtime::spawn_blocking(move || stream::run(notifications, receiver));
     let reader = client.clone();
     let reader_task = tauri::async_runtime::spawn(async move {
-        let mut lines = BufReader::new(stdout).lines();
+        let mut stdout = BufReader::new(stdout);
         loop {
-            match lines.next_line().await {
-                Ok(Some(line)) => match serde_json::from_str(&line) {
-                    Ok(value) => reader.incoming(value).await,
-                    Err(_) => {
-                        *reader.transport_error.lock().unwrap() =
-                            Some("Codex 返回了无效协议数据。".into());
-                        break;
-                    }
-                },
+            let line = match stream::read_frame(&mut stdout).await {
+                Ok(Some(line)) => line,
                 Ok(None) => break,
-                Err(e) => {
-                    *reader.transport_error.lock().unwrap() =
-                        Some(format!("Codex 输出读取失败：{e}"));
+                Err(error) => {
+                    *reader.transport_error.lock().unwrap() = Some(error);
                     break;
                 }
+            };
+            let value: Value = match serde_json::from_str(&line) {
+                Ok(value) => value,
+                Err(_) => {
+                    *reader.transport_error.lock().unwrap() =
+                        Some("Codex 返回了无效协议数据。".into());
+                    break;
+                }
+            };
+            if value.get("method").is_some() && value.get("id").is_none() {
+                if let Err(error) = queue.push(value, line.len()) {
+                    *reader.transport_error.lock().unwrap() = Some(error);
+                    break;
+                }
+            } else {
+                reader.incoming(value).await;
             }
         }
+        drop(queue);
         let _ = output_done.send(());
         reader.reader_done.store(true, Ordering::SeqCst);
         reader.exit_notify.notify_waiters();
@@ -513,6 +559,11 @@ fn supervise(
             reader_task.abort();
             let _ = reader_task.await;
         }
+        let mut notification_task = notification_task;
+        // A blocking worker may outlive this timeout; stop() also waits for its
+        // completion flag before permitting reconnection.
+        let _ = tokio::time::timeout(Duration::from_secs(1), &mut notification_task).await;
+
         let status = status
             .map(|s| s.to_string())
             .unwrap_or_else(|e| e.to_string());
@@ -871,7 +922,7 @@ async fn stop_message(c: &Arc<Client>, pane: &str) -> Reply {
 async fn stop_request(c: &Arc<Client>, pane: &str, request_id: Option<&str>) -> Reply {
     let index = pane_index(pane)?;
     let request_id = request_id.map(String::from);
-    let ids = turns::blocking(c, move |c| {
+    let ids = turns::control(c, move |c| {
         let mut lane = c.lanes[index].lock().unwrap();
         if request_id
             .as_deref()
@@ -903,7 +954,7 @@ pub async fn codex_reset(
 ) -> Reply {
     let c = get_client(&state, profile_id.as_deref()).await?;
     let index = pane_index(&pane)?;
-    turns::blocking(&c, move |c| {
+    turns::control(&c, move |c| {
         let mut lane = c.lanes[index].lock().unwrap();
         if lane.active {
             return Err("请先停止当前回复。".into());
@@ -970,6 +1021,7 @@ mod tests {
                 transport_error: Mutex::new(None),
                 exited: AtomicBool::new(false),
                 reader_done: AtomicBool::new(false),
+                notifications_done: AtomicBool::new(true),
                 exit_notify: Arc::new(Notify::new()),
                 storage_done: Arc::new(AtomicBool::new(false)),
                 events,
@@ -1094,7 +1146,7 @@ mod tests {
         assert!(text.contains("Error: configuration failed"));
     }
 
-    fn test_binary() -> PathBuf {
+    pub(super) fn test_binary() -> PathBuf {
         configured_binary(
             &std::env::var("PARLEY_TEST_CODEX_BIN")
                 .expect("set PARLEY_TEST_CODEX_BIN to your Codex executable's absolute path"),
@@ -1377,6 +1429,121 @@ mod tests {
         assert_eq!(
             c.storage.read("main").unwrap().thread_id.as_deref(),
             Some("saved-thread")
+        );
+    }
+    #[tokio::test]
+    #[ignore = "Uses the locally signed-in ChatGPT account; cancels after first text and makes one short tutor request"]
+    async fn live_codex_cancel_preserves_partial_text_and_other_pane() {
+        use crate::chat::TurnEvent;
+        let cwd = tempfile::tempdir().unwrap();
+        let c = launch(
+            test_binary(),
+            cwd.path().into(),
+            Channel::new(|_| Ok(())),
+            test_storage(),
+        )
+        .await
+        .unwrap();
+        struct Close(Arc<Client>);
+        impl Drop for Close {
+            fn drop(&mut self) {
+                self.0.close("live cancellation test complete");
+            }
+        }
+        let _close = Close(c.clone());
+        initialize(&c).await.unwrap();
+        let models = c
+            .rpc("model/list", json!({"includeHidden":false}))
+            .await
+            .unwrap();
+        let model = models["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|m| m["model"].as_str().filter(|m| m.contains("luna")))
+            .expect("This quota-limited test requires a luna model")
+            .to_owned();
+        let request = |pane: &str, text: &str| MessageRequest {
+            terminal_context: None,
+            pane: pane.into(),
+            conversation_id: pane.into(),
+            message_id: format!("cancel-test-{pane}"),
+            text: text.into(),
+            model: model.clone(),
+            target_language: "en".into(),
+            native_language: "zh-CN".into(),
+            mode: if pane == "main" {
+                "conversation".into()
+            } else {
+                "explain".into()
+            },
+        };
+        let (sender, mut output) = tokio::sync::mpsc::unbounded_channel::<TurnEvent>();
+        let channel = Channel::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Json(text) = body {
+                let _ = sender.send(serde_json::from_str(&text).unwrap());
+            }
+            Ok(())
+        });
+        let main = turns::send(&c, request("main", "For my English practice, please write a numbered list of 2000 different short sentences about daily life, one sentence per line. Start directly with sentence 1."), channel.clone()).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let event = output.recv().await.unwrap();
+                assert_eq!(
+                    event.status, "streaming",
+                    "main finished before cancellation: {:?}",
+                    event.error
+                );
+                if !event.text.is_empty() {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("No first text within cancellation test deadline");
+        // Cancel immediately while the other pane starts its independent turn.
+        let (stopped, tutor) = tokio::join!(
+            stop_request(&c, "main", Some("cancel-test-main")),
+            turns::send(
+                &c,
+                request("tutor", "用一句中文解释英文 hello 的意思。"),
+                channel
+            )
+        );
+        stopped.unwrap();
+        let tutor = tutor.unwrap();
+        assert_ne!(main["threadId"], tutor["threadId"]);
+        assert_ne!(main["turnId"], tutor["turnId"]);
+        let terminals = tokio::time::timeout(Duration::from_secs(60), async {
+            let mut terminals = HashMap::new();
+            while terminals.len() < 2 {
+                let event = output.recv().await.unwrap();
+                if event.status != "streaming" {
+                    assert!(terminals.insert(event.pane.clone(), event).is_none());
+                }
+            }
+            terminals
+        })
+        .await
+        .unwrap();
+        assert_eq!(terminals["main"].status, "interrupted");
+        assert!(!terminals["main"].text.is_empty());
+        assert_eq!(terminals["tutor"].status, "complete");
+        assert!(!terminals["tutor"].text.is_empty());
+        c.stop().await.unwrap();
+        for (pane, status) in [("main", "interrupted"), ("tutor", "idle")] {
+            let saved = c.storage.read(pane).unwrap();
+            assert_eq!(saved.status, status);
+            assert_eq!(saved.messages.last().unwrap().text, terminals[pane].text);
+        }
+        assert!(
+            output.try_recv().is_err(),
+            "unexpected events after terminal publication"
+        );
+        println!(
+            "model: {model}; main interrupted with {} saved characters; tutor complete with {} characters; process and notification worker stopped",
+            terminals["main"].text.chars().count(),
+            terminals["tutor"].text.chars().count()
         );
     }
     #[tokio::test]

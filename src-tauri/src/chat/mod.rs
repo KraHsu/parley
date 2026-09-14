@@ -1,6 +1,6 @@
 //! Stable local turn records and durable publications shared by all adapters.
 use crate::{backends::types::BackendProfile, storage::Storage};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::ipc::Channel;
 
@@ -21,7 +21,7 @@ pub struct TurnSnapshot {
     pub signature: String,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnEvent {
     pub profile_id: String,

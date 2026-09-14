@@ -16,6 +16,7 @@ pub(super) struct ActiveTurn {
     remote_thread: Option<String>,
     previous_turn: Option<String>,
     finished: bool,
+    dirty: bool,
 }
 impl ActiveTurn {
     pub(super) fn new(publisher: Publisher) -> Self {
@@ -28,6 +29,7 @@ impl ActiveTurn {
             remote_thread: None,
             previous_turn: None,
             finished: false,
+            dirty: false,
         }
     }
     pub(super) fn publish(&mut self, status: &str, error: Option<String>) -> Result<(), String> {
@@ -42,6 +44,7 @@ impl ActiveTurn {
             Some(&metadata),
             error,
         )?;
+        self.dirty = false;
         if status != "streaming" {
             self.finished = true;
         }
@@ -84,7 +87,21 @@ impl ActiveTurn {
             .join("\n\n");
         Ok(())
     }
+    pub(super) fn flush(&mut self) -> Result<(), String> {
+        if self.dirty {
+            self.publish("streaming", None)?;
+        }
+        Ok(())
+    }
+    pub(super) fn remote_turn(&self) -> Option<String> {
+        self.remote_turn.clone()
+    }
     pub(super) fn accept(&mut self, method: &str, params: &Value) -> Result<bool, String> {
+        let finished = self.accept_deferred(method, params)?;
+        self.flush()?;
+        Ok(finished)
+    }
+    pub(super) fn accept_deferred(&mut self, method: &str, params: &Value) -> Result<bool, String> {
         if self.finished {
             return Ok(true);
         }
@@ -107,7 +124,7 @@ impl ActiveTurn {
                     (params["itemId"].as_str(), params["delta"].as_str())
                 {
                     self.item(id, text, false)?;
-                    self.publish("streaming", None)?;
+                    self.dirty = true;
                 }
             }
             "item/completed" if params["item"]["type"] == "agentMessage" => {
@@ -116,13 +133,13 @@ impl ActiveTurn {
                     params["item"]["text"].as_str(),
                 ) {
                     self.item(id, text, true)?;
-                    self.publish("streaming", None)?;
+                    self.dirty = true;
                 }
             }
             "thread/tokenUsage/updated" => {
                 // Preserve the actual last-request and thread totals separately.
                 self.usage = Some(params["tokenUsage"].clone());
-                self.publish("streaming", None)?;
+                self.dirty = true;
             }
             "turn/completed" => {
                 let (status, error) = match params["turn"]["status"].as_str() {
@@ -158,20 +175,32 @@ impl ActiveTurn {
     }
 }
 
-pub(super) async fn blocking<T: Send + 'static>(
+pub(super) async fn control<T: Send + 'static>(
     c: &Arc<Client>,
     operation: impl FnOnce(&Client) -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
     let c = c.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let _gate = c.notifications.lock().unwrap();
         if !c.alive.load(Ordering::SeqCst) {
             return Err(c.closed_error());
         }
         operation(&c)
     })
     .await
-    .map_err(|_| "Codex 存储任务失败。".to_owned())?
+    .map_err(|_| "Codex 后台任务失败。".to_owned())?
+}
+pub(super) async fn blocking<T: Send + 'static>(
+    c: &Arc<Client>,
+    operation: impl FnOnce(&Client) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    control(c, move |c| {
+        let _gate = c.notifications.lock().unwrap();
+        if !c.alive.load(Ordering::SeqCst) {
+            return Err(c.closed_error());
+        }
+        operation(c)
+    })
+    .await
 }
 
 pub(super) async fn send(

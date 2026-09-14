@@ -67,7 +67,7 @@ GUI 保留官方 `codex app-server` 接入及其管理的认证；沿用用户�
 | `src/shared/use-workspace-window.ts` | 关闭时只断开 Codex                                                | 统一保存、取消和回收多个后端，保持有界关闭           |
 | `src-tauri/src/exchange.rs`          | 词句备份 v1 严格字段解析                                          | 后端来源元数据采用新版格式，继续支持导入 v1          |
 
-上表记录实施前的耦合。当前已拆出独立 workspace store、通用 chat store、后端配置 store 与按配置管理的 Codex 连接 registry。workspace 负责本地文档、历史、偏好与写入顺序，chat 负责活动请求、事件路由和切换保护；Codex 已复用通用 turn 记录、发布和前端事件处理，发送准备与事件保存已移至阻塞任务。统一运行时入口与 Codex 流式写入合并仍需继续整理。不能只把 `useCodexStore` 改名，内部仍依赖一个全局账号或线程。
+上表记录实施前的耦合。当前已拆出独立 workspace store、通用 chat store、后端配置 store 与按配置管理的 Codex 连接 registry。workspace 负责本地文档、历史、偏好与写入顺序，chat 负责活动请求、事件路由和切换保护；Codex 已复用通用 turn 记录、发布和前端事件处理，发送准备与事件保存已移至阻塞任务。Codex 通知使用有界队列并约每 50 毫秒合并写入，RPC 回执不等待通知保存；真实首段输出后取消与另一面板完成已验证。统一运行时入口仍需继续整理。不能只把 `useCodexStore` 改名，内部仍依赖一个全局账号或线程。
 
 ## 4. 目标架构与核心契约
 
