@@ -181,7 +181,9 @@ impl Storage {
         })
     }
     pub fn interrupt_backend(&self, profile: &str) -> Result<()> {
-        use super::schema::{conversation_backends as b, conversations as c, messages as m};
+        use super::schema::{
+            conversation_backends as b, conversations as c, messages as m, model_turns as t,
+        };
         use diesel::prelude::*;
         self.typed_transaction(|db| {
             let ids = b::table
@@ -200,6 +202,13 @@ impl Storage {
                     .filter(m::status.eq_any(["streaming", "pending"])),
             )
             .set(m::status.eq("interrupted"))
+            .execute(db)?;
+            diesel::update(
+                t::table
+                    .filter(t::profile_id.eq(profile))
+                    .filter(t::status.eq("streaming")),
+            )
+            .set(t::status.eq("interrupted"))
             .execute(db)?;
             Ok(())
         })

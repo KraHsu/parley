@@ -1,22 +1,7 @@
 use super::*;
 use crate::backends::{credentials::CredentialReference, types::BackendProfile};
 
-#[derive(Clone)]
-pub struct ApiTurn {
-    pub id: String,
-    pub conversation_id: String,
-    pub profile: BackendProfile,
-    pub auth_scope: String,
-    pub model: String,
-    pub user_id: String,
-    pub assistant_id: String,
-    pub text: String,
-    pub input: String,
-    pub target: String,
-    pub native: String,
-    pub mode: String,
-    pub signature: String,
-}
+pub use crate::chat::TurnSnapshot;
 
 #[derive(diesel::Queryable, diesel::Selectable)]
 #[diesel(table_name = super::schema::backend_credentials)]
@@ -35,7 +20,7 @@ impl From<CredentialRow> for CredentialReference {
     }
 }
 impl Storage {
-    pub fn claude_session_directory(&self, turn: &ApiTurn) -> Result<PathBuf> {
+    pub fn claude_session_directory(&self, turn: &TurnSnapshot) -> Result<PathBuf> {
         use sha2::{Digest, Sha256};
         let identity = serde_json::to_vec(&(
             &turn.profile.id,
@@ -139,7 +124,7 @@ impl Storage {
             Ok(())
         })
     }
-    pub fn begin_api_turn(&self, turn: &ApiTurn) -> Result<()> {
+    pub fn begin_turn(&self, turn: &TurnSnapshot) -> Result<()> {
         use super::schema::{
             conversation_backends as b, conversations as c, messages as m, model_turns as t,
         };
@@ -164,7 +149,7 @@ impl Storage {
                 .optional()?;
             if old_scope.is_some_and(|s| s != turn.auth_scope) {
                 return Err(
-                    "该会话的 API 凭据已改变。为避免向其他账号发送历史，请新建对话。".into(),
+                    "该会话的认证信息已改变。为避免向其他账号发送历史，请新建对话。".into(),
                 );
             }
             let (signature, pane, title) = c::table
@@ -246,9 +231,9 @@ impl Storage {
             Ok(())
         })
     }
-    pub fn update_api_turn(
+    pub fn update_turn(
         &self,
-        turn: &ApiTurn,
+        turn: &TurnSnapshot,
         sequence: i64,
         text: &str,
         status: &str,

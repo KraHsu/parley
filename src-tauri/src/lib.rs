@@ -1,4 +1,5 @@
 mod backends;
+mod chat;
 mod codex;
 mod exchange;
 mod launcher;

@@ -18,6 +18,14 @@ describe('reported token usage', () => {
       }),
     ).toBe('输入 20 · 缓存读取 10 · 缓存写入 4 tokens')
   })
+  it('labels Codex last-request counters and preserves thread totals separately', () => {
+    expect(
+      formatUsage({
+        last: { inputTokens: 20, outputTokens: 3, totalTokens: 23, cachedInputTokens: 4 },
+        total: { inputTokens: 1000, totalTokens: 2000 },
+      }),
+    ).toBe('最近请求 · 输入 20 · 输出 3 · 合计 23 · 缓存读取 4 tokens')
+  })
   it('distinguishes reported zero from missing, invalid, and unknown counters', () => {
     expect(formatUsage({ input_tokens: 0 })).toBe('输入 0 tokens')
     for (const value of [

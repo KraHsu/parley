@@ -1,9 +1,9 @@
 //! Chat Completions provider differences. See docs/BACKEND_COMPATIBILITY.md.
 use super::{http::Output, types::Provider};
-use crate::storage::api::ApiTurn;
+use crate::storage::api::TurnSnapshot;
 use serde_json::{Value, json};
 
-pub(super) fn request(turn: &ApiTurn, messages: Vec<Value>) -> Value {
+pub(super) fn request(turn: &TurnSnapshot, messages: Vec<Value>) -> Value {
     let provider = turn.profile.config.provider;
     let mut body = json!({"model":turn.model,"messages":messages,"stream":true});
     // Z.AI reports usage on the final chunk without this undocumented parameter.

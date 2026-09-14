@@ -182,7 +182,6 @@ pub(super) async fn connect(
 mod tests {
     use super::*;
     use crate::backends::types::{BackendProfile, SaveProfile};
-    use crate::storage::ConversationConfig;
 
     fn profile(storage: &Storage, name: &str) -> BackendProfile {
         let mut config = storage
@@ -214,21 +213,24 @@ mod tests {
         c.exited.store(true, Ordering::SeqCst);
         c.reader_done.store(true, Ordering::SeqCst);
         storage.create_for_backend(pane, pane, &profile.id).unwrap();
-        storage
-            .begin(
-                pane,
-                "user",
-                "hello",
-                ConversationConfig {
-                    model: "test",
-                    target: "en",
-                    native: "zh-CN",
-                    mode: "conversation",
-                },
-            )
-            .unwrap();
+        let output = events.clone();
+        let publication = turns::fixture_publication(
+            storage.clone(),
+            profile.clone(),
+            pane,
+            Channel::new(move |body| {
+                if let tauri::ipc::InvokeResponseBody::Json(text) = body {
+                    output
+                        .lock()
+                        .unwrap()
+                        .push(serde_json::from_str(&text).unwrap());
+                }
+                Ok(())
+            }),
+        );
         *c.lanes[pane_index(pane).unwrap()].lock().unwrap() = Lane {
             active: true,
+            publication: Some(publication),
             conversation: Some(pane.into()),
             thread: Some("same-upstream-thread".into()),
             ..Default::default()
@@ -249,6 +251,9 @@ mod tests {
         let state = CodexState::default();
         *state.slot(&a.id).client.lock().unwrap() = Some(ca.clone());
         *state.slot(&b.id).client.lock().unwrap() = Some(cb.clone());
+        for c in [&ca, &cb] {
+            c.incoming(json!({"method":"turn/started","params":{"threadId":"same-upstream-thread","turn":{"id":"same-turn"}}})).await;
+        }
         ca.incoming(delta("first")).await;
         cb.incoming(delta("second")).await;
         state.disconnect(Some(&a.id)).await.unwrap();
@@ -269,7 +274,7 @@ mod tests {
         assert_eq!(tutor.messages[1].text, "second continues");
         assert_eq!(eb.lock().unwrap()[0]["profileId"], b.id);
         assert_eq!(eb.lock().unwrap()[0]["profileRevision"], b.revision);
-        assert_eq!(ea.lock().unwrap()[0]["params"]["pane"], "main");
+        assert_eq!(ea.lock().unwrap()[0]["pane"], "main");
         state.disconnect(None).await.unwrap();
         assert!(state.get(&b.id).is_err());
         assert_eq!(storage.read("tutor").unwrap().status, "interrupted");
@@ -317,17 +322,18 @@ mod tests {
             )
             .await
         });
-        BufReader::new(peer)
-            .lines()
-            .next_line()
-            .await
-            .unwrap()
-            .unwrap();
-        c.close("disconnected while reading account");
+        c.exited.store(true, Ordering::SeqCst);
+        c.reader_done.store(true, Ordering::SeqCst);
+        let mut lines = BufReader::new(peer).lines();
+        let auth: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        c.incoming(json!({"id":auth["id"],"result":{"account":{"type":"chatgpt","email":"test@example.invalid"}}})).await;
+        lines.next_line().await.unwrap().unwrap();
+        c.close("disconnected after accepting the local turn");
         assert!(task.await.unwrap().is_err());
+        c.stop().await.unwrap();
         let saved = c.storage.read("main").unwrap();
         assert_eq!(saved.status, "interrupted");
-        assert_eq!(saved.messages[0].status, "interrupted");
+        assert_eq!(saved.messages[1].status, "interrupted");
     }
 
     #[tokio::test]
@@ -398,7 +404,7 @@ mod tests {
                 .unwrap_err()
                 .contains("重新连接")
         );
-        assert_eq!(storage.read("main").unwrap().messages.len(), 1);
+        assert_eq!(storage.read("main").unwrap().messages.len(), 2);
         assert!(storage.read("wrong-profile").unwrap().messages.is_empty());
     }
 

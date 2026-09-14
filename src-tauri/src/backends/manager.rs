@@ -4,8 +4,11 @@ use super::{
     http,
     types::BackendKind,
 };
-use crate::storage::{Storage, StorageState, api::ApiTurn};
-use serde::{Deserialize, Serialize};
+use crate::chat::{Publisher, TurnEvent};
+#[cfg(test)]
+use crate::storage::Storage;
+use crate::storage::{StorageState, api::TurnSnapshot};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -63,82 +66,9 @@ pub struct SendRequest {
     pub terminal_context: Option<String>,
 }
 
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TurnEvent {
-    pub profile_id: String,
-    pub profile_revision: i64,
-    pub conversation_id: String,
-    pub pane: String,
-    pub turn_id: String,
-    pub request_id: String,
-    pub message_id: String,
-    pub sequence: i64,
-    pub status: String,
-    pub text: String,
-    pub usage: Option<Value>,
-    pub error: Option<String>,
-    pub notice: Option<String>,
-}
-
 enum Payload {
     Http { body: Value, clipped: bool },
     Claude(claude::Request),
-}
-
-struct Publisher {
-    storage: Storage,
-    turn: ApiTurn,
-    pane: String,
-    events: Channel<TurnEvent>,
-    sequence: i64,
-    notice: Option<String>,
-}
-impl Publisher {
-    fn publish(
-        &mut self,
-        output: &http::Output,
-        status: &str,
-        error: Option<String>,
-    ) -> impl std::future::Future<Output = Result<(), String>> + Send + use<> {
-        self.sequence += 1;
-        let event = TurnEvent {
-            profile_id: self.turn.profile.id.clone(),
-            profile_revision: self.turn.profile.revision,
-            conversation_id: self.turn.conversation_id.clone(),
-            pane: self.pane.clone(),
-            turn_id: self.turn.id.clone(),
-            request_id: self.turn.user_id.clone(),
-            message_id: self.turn.assistant_id.clone(),
-            sequence: self.sequence,
-            status: status.into(),
-            text: output.text.clone(),
-            usage: output.usage.clone(),
-            error,
-            notice: self.notice.clone(),
-        };
-        let storage = self.storage.clone();
-        let turn = self.turn.clone();
-        let continuation = output.continuation.clone();
-        let events = self.events.clone();
-        async move {
-            tauri::async_runtime::spawn_blocking(move || {
-                if storage.update_api_turn(
-                    &turn,
-                    event.sequence,
-                    &event.text,
-                    &event.status,
-                    event.usage.as_ref(),
-                    continuation.as_ref(),
-                )? {
-                    let _ = events.send(event);
-                }
-                Ok(())
-            })
-            .await
-            .map_err(|_| "保存回复任务失败。".to_owned())?
-        }
-    }
 }
 
 impl BackendState {
@@ -356,7 +286,7 @@ impl BackendState {
                     "{}|{}|{}|{}",
                     request.model, request.target_language, request.native_language, request.mode
                 );
-                let turn = ApiTurn {
+                let turn = TurnSnapshot {
                     id: turn_id,
                     conversation_id: request.conversation_id,
                     profile,
@@ -381,7 +311,7 @@ impl BackendState {
                 if *cancellation.borrow() {
                     return Err("已停止发送。".into());
                 }
-                storage.begin_api_turn(&turn)?;
+                storage.begin_turn(&turn)?;
                 Ok((storage, turn, credential, payload))
             })
             .await?;
@@ -400,7 +330,7 @@ impl BackendState {
                         .into()
                 }),
             };
-            let outcome = match publisher.publish(&output, "streaming", None).await {
+            let outcome = match publish_output(&mut publisher, &output, "streaming", None).await {
                 Ok(()) => match payload {
                     Payload::Claude(request) => {
                         claude::generate(
@@ -409,14 +339,14 @@ impl BackendState {
                             &request,
                             &mut output,
                             cancelled.clone(),
-                            |out| publisher.publish(out, "streaming", None),
+                            |out| publish_output(&mut publisher, out, "streaming", None),
                         )
                         .await
                     }
                     Payload::Http { body, .. } => tokio::select! {
                         biased;
                         _ = async { if !*cancelled.borrow() { let _ = cancelled.changed().await; } } => Err("已停止回复。".to_owned()),
-                        result = http::generate(&turn, &credential, body, &mut output, |out| publisher.publish(out, "streaming", None)) => result,
+                        result = http::generate(&turn, &credential, body, &mut output, |out| publish_output(&mut publisher, out, "streaming", None)) => result,
                     },
                 },
                 Err(error) => Err(error),
@@ -428,7 +358,8 @@ impl BackendState {
             } else {
                 "failed"
             };
-            if let Err(error) = publisher.publish(&output, status, outcome.err()).await {
+            if let Err(error) = publish_output(&mut publisher, &output, status, outcome.err()).await
+            {
                 // A disk error must be visible even when the durable final marker cannot be written.
                 let _ = events.send(TurnEvent {
                     profile_id: turn.profile.id.clone(),
@@ -472,6 +403,21 @@ pub async fn backend_disconnect(
     profile_id: Option<String>,
 ) -> Result<(), String> {
     state.disconnect(profile_id.as_deref()).await
+}
+
+fn publish_output(
+    publisher: &mut Publisher,
+    output: &http::Output,
+    status: &str,
+    error: Option<String>,
+) -> impl std::future::Future<Output = Result<(), String>> + Send + use<> {
+    publisher.publish(
+        &output.text,
+        status,
+        output.usage.as_ref(),
+        output.continuation.as_ref(),
+        error,
+    )
 }
 
 #[cfg(test)]

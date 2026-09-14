@@ -232,7 +232,9 @@ export const useChatStore = defineStore('chat', () => {
         for (const message of lane.messages)
           if (message.status === 'pending' || message.status === 'streaming')
             message.status = 'interrupted'
-        lane.request++
+        // The durable turn channel can be delivered after the connection notice.
+        // Its request ID still guards against a newer send or navigation.
+        if (!lane.apiRequestId) lane.request++
       }
     }
     if (!p.pane || !codexConnections.get(profileId).connected) return
@@ -378,51 +380,52 @@ export const useChatStore = defineStore('chat', () => {
         terminalContext: terminalSnapshot,
         mode,
       }
-      if (backend.kind === 'codex')
-        await invoke('codex_send', { request: payload, ...codexScope(backend.profileId) })
-      else {
-        let sequence = 0
-        let finished = false
-        const events = new Channel<TurnEvent>()
-        events.onmessage = (event) => {
-          if (
-            finished ||
-            request !== lane.request ||
-            lane.id !== conversationId ||
-            event.pane !== pane ||
-            event.conversationId !== conversationId ||
-            event.requestId !== messageId ||
-            event.profileId !== backend.profileId ||
-            event.profileRevision !== backend.profileRevision ||
-            event.sequence <= sequence
-          )
-            return
-          sequence = event.sequence
-          let answer = lane.messages.find((m) => m.id === event.messageId)
-          if (!answer) {
-            lane.messages.push({
-              id: event.messageId,
-              role: 'assistant',
-              text: '',
-              status: 'streaming',
-              vocabularyTarget: answerSnapshot,
-            })
-            answer = lane.messages.at(-1)!
-          }
-          answer.text = event.text
-          answer.status = event.status
-          if (event.usage) answer.usage = event.usage
-          const user = lane.messages.find((m) => m.id === messageId)
-          if (user) user.status = 'complete'
-          if (event.error) lane.error = event.error
-          if (event.notice) lane.notice = event.notice
-          if (event.status !== 'streaming') {
-            finished = true
-            lane.busy = false
-            lane.apiRequestId = undefined
-            void refreshHistory()
-          }
+      let sequence = 0
+      let finished = false
+      const events = new Channel<TurnEvent>()
+      events.onmessage = (event) => {
+        if (
+          finished ||
+          request !== lane.request ||
+          lane.id !== conversationId ||
+          event.pane !== pane ||
+          event.conversationId !== conversationId ||
+          event.requestId !== messageId ||
+          event.profileId !== backend.profileId ||
+          event.profileRevision !== backend.profileRevision ||
+          event.sequence <= sequence
+        )
+          return
+        sequence = event.sequence
+        let answer = lane.messages.find((m) => m.id === event.messageId)
+        if (!answer) {
+          lane.messages.push({
+            id: event.messageId,
+            role: 'assistant',
+            text: '',
+            status: 'streaming',
+            vocabularyTarget: answerSnapshot,
+          })
+          answer = lane.messages.at(-1)!
         }
+        answer.text = event.text
+        answer.status = event.status
+        if (event.usage) answer.usage = event.usage
+        const user = lane.messages.find((m) => m.id === messageId)
+        if (user) user.status = 'complete'
+        if (event.error) lane.error = event.error
+        else if (event.status === 'complete') lane.error = ''
+        if (event.notice) lane.notice = event.notice
+        if (event.status !== 'streaming') {
+          finished = true
+          lane.busy = false
+          lane.apiRequestId = undefined
+          void refreshHistory()
+        }
+      }
+      if (backend.kind === 'codex')
+        await invoke('codex_send', { request: payload, events, ...codexScope(backend.profileId) })
+      else
         await invoke('backend_send', {
           request: {
             ...payload,
@@ -431,7 +434,6 @@ export const useChatStore = defineStore('chat', () => {
           },
           events,
         })
-      }
       if (request === lane.request && lane.draft === text) lane.draft = ''
       await flush()
       await refreshHistory()
@@ -455,7 +457,11 @@ export const useChatStore = defineStore('chat', () => {
     try {
       const lane = lanes[pane]
       if (lane.backend.kind === 'codex')
-        await invoke('codex_stop', { pane, ...codexScope(lane.backend.profileId) })
+        await invoke('codex_stop', {
+          pane,
+          requestId: lane.apiRequestId ?? null,
+          ...codexScope(lane.backend.profileId),
+        })
       else
         await invoke('backend_stop', {
           conversationId: lane.id,

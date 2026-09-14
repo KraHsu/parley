@@ -184,6 +184,7 @@ fn migrate(db: &mut SqliteConnection) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(test)]
 pub struct ConversationConfig<'a> {
     pub model: &'a str,
     pub target: &'a str,

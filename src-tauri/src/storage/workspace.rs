@@ -5,7 +5,9 @@ use super::schema::{
 use super::typed::DbResult;
 use super::*;
 use crate::backends::types::ProfileConfig;
-use diesel::{prelude::*, upsert::excluded};
+use diesel::prelude::*;
+#[cfg(test)]
+use diesel::upsert::excluded;
 
 #[derive(Queryable, Selectable)]
 #[diesel(table_name = c)]
@@ -235,6 +237,7 @@ impl Storage {
             Ok(())
         })
     }
+    #[cfg(test)]
     pub fn begin(
         &self,
         id: &str,
@@ -286,6 +289,7 @@ impl Storage {
             Ok(())
         })
     }
+    #[cfg(test)]
     pub fn event(&self, id: &str, method: &str, p: &Value) -> Result<()> {
         self.typed_transaction(|db| {
             match method {
@@ -373,13 +377,6 @@ impl Storage {
             }
             Ok(())
         })
-    }
-    pub fn fail(&self, id: &str) -> Result<()> {
-        self.event(
-            id,
-            "turn/completed",
-            &serde_json::json!({"turn":{"status":"failed"}}),
-        )
     }
     pub fn delete(&self, id: &str) -> Result<()> {
         self.typed_transaction(|db| {

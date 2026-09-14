@@ -698,7 +698,85 @@ describe('multiple Codex profiles', () => {
     emit('item/agentMessage/delta', { pane: 'tutor', itemId: 'same', delta: ' continues' }, 1)
     expect(store.lanes.tutor.messages.at(-1)?.text).toBe('Tutor answer continues')
     await store.stop('tutor')
-    expect(mock.invoke).toHaveBeenCalledWith('codex_stop', { pane: 'tutor', profileId: 'codex-b' })
+    expect(mock.invoke).toHaveBeenCalledWith('codex_stop', {
+      pane: 'tutor',
+      requestId: expect.any(String),
+      profileId: 'codex-b',
+    })
+  })
+  it('applies the common durable turn channel to both Codex panes and rejects post-final output', async () => {
+    const { store } = await setup()
+    await store.send('main', 'Hello')
+    await store.send('tutor', 'Explain')
+    const calls = mock.invoke.mock.calls.filter(([method]) => method === 'codex_send')
+    for (const [index, pane] of (['main', 'tutor'] as const).entries()) {
+      const args = calls[index]![1]
+      const event: TurnEvent = {
+        profileId: args.profileId,
+        profileRevision: 2,
+        conversationId: pane,
+        pane,
+        turnId: `local-turn-${pane}`,
+        requestId: args.request.messageId,
+        messageId: `local-answer-${pane}`,
+        sequence: 1,
+        status: 'streaming',
+        text: 'partial',
+        usage: null,
+        error: null,
+        notice: null,
+      }
+      args.events.onmessage(event)
+      expect(store.lanes[pane].messages.at(-1)?.text).toBe('partial')
+      store.lanes[pane].error = 'Temporary connection notice'
+      args.events.onmessage({
+        ...event,
+        sequence: 2,
+        status: 'complete',
+        text: 'final',
+        usage: { last: { inputTokens: 20, outputTokens: 3 } },
+      })
+      args.events.onmessage({ ...event, sequence: 3, text: 'late overwrite' })
+      expect(store.lanes[pane].busy).toBe(false)
+      expect(store.lanes[pane].messages.at(-1)?.text).toBe('final')
+      expect(store.lanes[pane].error).toBe('')
+      expect(store.lanes[pane].messages.at(-1)?.usage).toEqual({
+        last: { inputTokens: 20, outputTokens: 3 },
+      })
+    }
+    expect(store.lanes.main.messages.at(-1)?.id).not.toBe(store.lanes.tutor.messages.at(-1)?.id)
+  })
+  it('accepts an already saved final turn after the connection notice arrives first', async () => {
+    const { store, connections } = await setup()
+    await store.send('main', 'Hello')
+    const args = mock.invoke.mock.calls.find(([method]) => method === 'codex_send')![1]
+    const event: TurnEvent = {
+      profileId: 'codex-a',
+      profileRevision: 2,
+      conversationId: 'main',
+      pane: 'main',
+      turnId: 'local-turn',
+      requestId: args.request.messageId,
+      messageId: 'local-answer',
+      sequence: 1,
+      status: 'streaming',
+      text: 'partial',
+      usage: null,
+      error: null,
+      notice: null,
+    }
+    args.events.onmessage(event)
+    await connections.get('codex-a').disconnect()
+    args.events.onmessage({
+      ...event,
+      sequence: 2,
+      status: 'interrupted',
+      text: 'final saved partial',
+    })
+    expect(store.lanes.main.messages.at(-1)?.text).toBe('final saved partial')
+    expect(store.lanes.main.messages.at(-1)?.status).toBe('interrupted')
+    args.events.onmessage({ ...event, sequence: 3, text: 'wrong late write' })
+    expect(store.lanes.main.messages.at(-1)?.text).toBe('final saved partial')
   })
   it('ignores the wrong profile or revision and requires reconnect after editing settings', async () => {
     const { store, backends } = await setup()

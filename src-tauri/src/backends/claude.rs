@@ -4,7 +4,7 @@ use super::{
     http::{self, Output},
     types::{BackendKind, BackendProfile},
 };
-use crate::storage::api::ApiTurn;
+use crate::storage::api::TurnSnapshot;
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
@@ -132,7 +132,11 @@ pub async fn check(profile: &BackendProfile) -> Result<(), String> {
     Ok(())
 }
 
-fn command(turn: &ApiTurn, credential: &Credential, request: &Request) -> Result<Command, String> {
+fn command(
+    turn: &TurnSnapshot,
+    credential: &Credential,
+    request: &Request,
+) -> Result<Command, String> {
     let mut cmd = base_command(Path::new(&turn.profile.config.binary_path))?;
     cmd.current_dir(&request.directory)
         .env("CLAUDE_CONFIG_DIR", request.directory.join("config"))
@@ -339,7 +343,7 @@ impl Drop for Process {
 }
 
 pub async fn generate<F, Fut>(
-    turn: &ApiTurn,
+    turn: &TurnSnapshot,
     credential: &Credential,
     request: &Request,
     output: &mut Output,
@@ -366,7 +370,7 @@ where
 
 async fn run<F, Fut>(
     mut command: Command,
-    turn: &ApiTurn,
+    turn: &TurnSnapshot,
     output: &mut Output,
     mut cancel: watch::Receiver<bool>,
     mut changed: F,

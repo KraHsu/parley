@@ -1,4 +1,4 @@
-use super::api::ApiTurn;
+use super::api::TurnSnapshot;
 use super::*;
 use crate::backends::{
     credentials::CredentialReference,
@@ -6,7 +6,7 @@ use crate::backends::{
 };
 use serde_json::json;
 
-pub(crate) fn turn(storage: &Storage, conversation: &str, pane: &str) -> ApiTurn {
+pub(crate) fn turn(storage: &Storage, conversation: &str, pane: &str) -> TurnSnapshot {
     let profile = storage
         .save_backend_profile(SaveProfile {
             id: None,
@@ -24,7 +24,7 @@ pub(crate) fn turn(storage: &Storage, conversation: &str, pane: &str) -> ApiTurn
     storage
         .create_for_backend(conversation, pane, &profile.id)
         .unwrap();
-    ApiTurn {
+    TurnSnapshot {
         id: uuid::Uuid::new_v4().to_string(),
         conversation_id: conversation.into(),
         profile,
@@ -40,8 +40,8 @@ pub(crate) fn turn(storage: &Storage, conversation: &str, pane: &str) -> ApiTurn
         signature: "immutable-config".into(),
     }
 }
-fn next(turn: &ApiTurn) -> ApiTurn {
-    ApiTurn {
+fn next(turn: &TurnSnapshot) -> TurnSnapshot {
+    TurnSnapshot {
         id: uuid::Uuid::new_v4().to_string(),
         user_id: uuid::Uuid::new_v4().to_string(),
         assistant_id: uuid::Uuid::new_v4().to_string(),
@@ -53,18 +53,18 @@ fn next(turn: &ApiTurn) -> ApiTurn {
 fn api_updates_are_ordered_final_once_and_preserve_provider_context() {
     let s = Storage::memory();
     let turn = turn(&s, "main", "main");
-    s.begin_api_turn(&turn).unwrap();
+    s.begin_turn(&turn).unwrap();
     assert!(
-        s.update_api_turn(&turn, 2, "你好", "streaming", None, None)
+        s.update_turn(&turn, 2, "你好", "streaming", None, None)
             .unwrap()
     );
     assert!(
-        !s.update_api_turn(&turn, 1, "stale", "streaming", None, None)
+        !s.update_turn(&turn, 1, "stale", "streaming", None, None)
             .unwrap()
     );
     let output = json!([{"type":"reasoning","encrypted_content":"opaque fixture"},{"type":"message","content":[{"type":"output_text","text":"你好！"}]}]);
     assert!(
-        s.update_api_turn(
+        s.update_turn(
             &turn,
             3,
             "你好！",
@@ -75,7 +75,7 @@ fn api_updates_are_ordered_final_once_and_preserve_provider_context() {
         .unwrap()
     );
     assert!(
-        !s.update_api_turn(&turn, 4, "late", "interrupted", None, None)
+        !s.update_turn(&turn, 4, "late", "interrupted", None, None)
             .unwrap()
     );
     let saved = s.read("main").unwrap();
@@ -86,8 +86,8 @@ fn api_updates_are_ordered_final_once_and_preserve_provider_context() {
         vec![(turn.input.clone(), "你好！".into(), Some(output))]
     );
     let follow = next(&turn);
-    s.begin_api_turn(&follow).unwrap();
-    s.update_api_turn(&follow, 1, "partial", "failed", None, None)
+    s.begin_turn(&follow).unwrap();
+    s.update_turn(&follow, 1, "partial", "failed", None, None)
         .unwrap();
     assert_eq!(s.api_history("main").unwrap().len(), 1);
     assert_eq!(s.read("main").unwrap().messages[3].text, "partial");
@@ -96,23 +96,23 @@ fn api_updates_are_ordered_final_once_and_preserve_provider_context() {
 fn duplicate_turn_rolls_back_messages_and_conversation_state() {
     let s = Storage::memory();
     let turn = turn(&s, "main", "main");
-    s.begin_api_turn(&turn).unwrap();
-    s.update_api_turn(&turn, 1, "answer", "complete", None, None)
+    s.begin_turn(&turn).unwrap();
+    s.update_turn(&turn, 1, "answer", "complete", None, None)
         .unwrap();
     // Failure after inserting the user row must roll the entire transaction back.
-    let duplicate = ApiTurn {
+    let duplicate = TurnSnapshot {
         user_id: "new-user".into(),
         ..next(&turn)
     };
-    let duplicate = ApiTurn {
+    let duplicate = TurnSnapshot {
         assistant_id: turn.assistant_id.clone(),
         ..duplicate
     };
-    assert!(s.begin_api_turn(&duplicate).is_err());
+    assert!(s.begin_turn(&duplicate).is_err());
     let saved = s.read("main").unwrap();
     assert_eq!(saved.status, "idle");
     assert_eq!(saved.messages.len(), 2);
-    assert!(s.begin_api_turn(&turn).is_err());
+    assert!(s.begin_turn(&turn).is_err());
 }
 #[test]
 fn account_binding_and_pane_exclusivity_prevent_cross_backend_history() {
@@ -120,8 +120,8 @@ fn account_binding_and_pane_exclusivity_prevent_cross_backend_history() {
     let a = turn(&s, "api-main", "main");
     let b = turn(&s, "api-tutor", "tutor");
     s.create("codex", "main").unwrap();
-    s.begin_api_turn(&a).unwrap();
-    s.begin_api_turn(&b).unwrap();
+    s.begin_turn(&a).unwrap();
+    s.begin_turn(&b).unwrap();
     assert!(
         s.begin(
             "codex",
@@ -136,22 +136,22 @@ fn account_binding_and_pane_exclusivity_prevent_cross_backend_history() {
         )
         .is_err()
     );
-    s.update_api_turn(&a, 1, "done", "complete", None, None)
+    s.update_turn(&a, 1, "done", "complete", None, None)
         .unwrap();
-    let changed = ApiTurn {
+    let changed = TurnSnapshot {
         auth_scope: "different-account".into(),
         ..next(&a)
     };
     assert!(
-        s.begin_api_turn(&changed)
+        s.begin_turn(&changed)
             .unwrap_err()
-            .contains("凭据已改变")
+            .contains("认证信息已改变")
     );
-    let wrong = ApiTurn {
+    let wrong = TurnSnapshot {
         profile: b.profile.clone(),
         ..next(&a)
     };
-    assert!(s.begin_api_turn(&wrong).is_err());
+    assert!(s.begin_turn(&wrong).is_err());
     assert_eq!(s.read("api-main").unwrap().messages.len(), 2);
     assert_eq!(s.read("api-tutor").unwrap().status, "running");
     s.begin(
@@ -166,7 +166,7 @@ fn account_binding_and_pane_exclusivity_prevent_cross_backend_history() {
         },
     )
     .unwrap();
-    assert!(s.begin_api_turn(&next(&a)).is_err());
+    assert!(s.begin_turn(&next(&a)).is_err());
 }
 #[test]
 fn credential_removal_checks_revision_before_external_work_and_retains_failed_removal() {
@@ -212,8 +212,8 @@ fn api_restart_keeps_partial_text_and_excludes_it_from_continuation() {
     {
         let s = Storage::open(&path).unwrap();
         let a = turn(&s, "api", "main");
-        s.begin_api_turn(&a).unwrap();
-        s.update_api_turn(&a, 1, "unfinished 🌍", "streaming", None, None)
+        s.begin_turn(&a).unwrap();
+        s.update_turn(&a, 1, "unfinished 🌍", "streaming", None, None)
             .unwrap();
     }
     let s = Storage::open(&path).unwrap();
@@ -235,14 +235,14 @@ fn usage_reopens_with_only_its_own_assistant_even_when_upstream_ids_match() {
         let a = turn(&s, "first", "main");
         let b = turn(&s, "second", "tutor");
         assert_eq!(a.assistant_id, b.assistant_id);
-        s.begin_api_turn(&a).unwrap();
-        s.begin_api_turn(&b).unwrap();
-        s.update_api_turn(&a, 1, "done", "complete", Some(&first), None)
+        s.begin_turn(&a).unwrap();
+        s.begin_turn(&b).unwrap();
+        s.update_turn(&a, 1, "done", "complete", Some(&first), None)
             .unwrap();
-        s.update_api_turn(&b, 1, "partial", "streaming", Some(&second), None)
+        s.update_turn(&b, 1, "partial", "streaming", Some(&second), None)
             .unwrap();
         // A terminal update without counters must keep already reported usage.
-        s.update_api_turn(&b, 2, "partial", "interrupted", None, None)
+        s.update_turn(&b, 2, "partial", "interrupted", None, None)
             .unwrap();
         s.create("legacy", "main").unwrap();
     }

@@ -188,3 +188,22 @@ P1 的完整工作区 store 拆分、Codex 通用 turn 协调及异步存储进�
 本轮前端 **57 项**测试通过；仓库格式检查、TypeScript、Rust 格式与 Clippy（禁止警告）、前端生产构建和 Linux Tauri 调试构建通过。Rust 业务代码未改动，沿用上一节点的 94 项普通测试结果。
 
 P1 剩余重点为 Codex 与其他后端的通用 turn 协调和存储调度。真实服务调用、完整桌面学习流程及多平台验收仍继续推进。
+
+## 2026-09-14：Codex 通用 turn 与存储调度
+
+- 新增 Rust `chat::TurnSnapshot` / `TurnEvent` / `Publisher`，Codex、原生/兼容 API 和 Claude Code 共用本地 turn 写入与发布。原 API 专用方法改为 `begin_turn` / `update_turn`；数据库结构不变，无新增迁移。旧 Codex 消息与词句来源的 ID 保持不变。
+- 新 Codex 回复使用独立的本地 turn/message UUID；上游 thread/turn/item ID 存入协议元数据，不再直接作为新消息的主键。多个 agentMessage 按顺序合并为本轮可见正文；完整 item 替换对应 delta，只有协议确认成功且文本完整时才发布成功终态。迟到事件、重复终态和前一轮事件不能改写已结束记录。
+- 前端的 Codex 请求和其他后端共用请求级 `TurnEvent` Channel，按本地请求、配置版本与序号处理回复。连接通知先于已保存的最终事件到达时，界面仍可接收该请求的最终正文；切换或新请求继续阻止旧事件覆盖。
+- Codex 的会话准备、线程绑定、事件保存与关闭持久化使用阻塞任务，数据库等待不占用异步执行器。断开先拒绝待处理 RPC、通知进程退出，再等待最终持久化与进程/reader 一起完成；全部完成后才允许复用该配置。旧 `Storage::begin/event` 只保留为历史数据库测试 fixture。
+- 停止操作携带本地请求 ID，前一请求的迟到取消不能停止下一请求；账号读取阶段也能取消。已接受的 turn 保留部分正文与中断状态；尚未通过账号/绑定检查的请求不会新增 turn。原账号核验与精确 `thread/resume` 保留。
+- 保存 Codex `thread/tokenUsage/updated` 返回的原始 `last` / `total` 对象，界面明确标为“最近请求”，不会将整个线程累计用量当作本轮用量。协议字段以本机 0.154.0 生成的 JSON Schema 和[官方事件说明](https://learn.chatgpt.com/docs/app-server)核对。
+
+### 验证与剩余范围
+
+Rust **98 项**普通测试、前端 **60 项**测试通过。新增证据覆盖：恢复既有线程、通知早于 RPC 回执、本地 ID 与上游 ID 分离、完整文本/用量落库、重复终态、前一轮通知、迟到取消、数据库等待时立即断开，以及连接通知与最终正文的跨 Channel 顺序。格式、TypeScript、Clippy（禁止警告）、前端生产构建和 Linux Tauri 调试构建通过。
+
+使用本机 **Codex CLI 0.154.0 / gpt-5.6-luna** 完成真实小用量双面板生成和重启续聊。两个面板使用不同线程；重启后继续相同线程，回答正确保留测试词 `persimmon`。测试仅发送固定学习文本，使用临时数据库；本轮执行两次以核对最终回执、模型名称和显式进程回收。只读双配置/既有登录/独立断开实测也通过。入口：`PARLEY_TEST_CODEX_BIN=/path/to/codex cargo test --workspace --locked --lib codex::tests::live_codex_dual_conversation -- --ignored --nocapture`。
+
+Chrome 普通窗口（1280 px）和伴随窗口（480 px）通过模拟桌面 IPC 验证：统一事件显示最终正文、断开通知不丢最终内容、重复输出不覆盖正文，Codex 用量带“最近请求”标签。浏览器检查不等于原生桌面操作验收。
+
+后续仍需统一 Codex 与 API 的运行时调度入口、为 Codex 合并流式写入并检查长流取消。真实 Codex 取消及与真实 API 的组合、其他服务商调用、安装包学习流程和多平台验收尚未完成，保持原交付范围。
