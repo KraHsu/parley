@@ -426,14 +426,18 @@ mod tests {
     #[test]
     fn legacy_preferences_and_default_profile_share_one_path() {
         let s = Storage::memory();
+        let directory = tempfile::tempdir().unwrap();
+        let original_path = directory.path().join("tools").join("codex");
+        let updated_path = directory.path().join("new tools").join("codex");
+        let updated_path = updated_path.to_string_lossy().into_owned();
         let mut preferences = Preferences {
-            codex_path: "/tools/codex".into(),
+            codex_path: original_path.to_string_lossy().into_owned(),
             ..Default::default()
         };
         s.save(&preferences, &[]).unwrap();
         let mut p = s.backend_profile(DEFAULT_CODEX_PROFILE).unwrap();
         assert_eq!(p.config.binary_path, preferences.codex_path);
-        p.config.binary_path = "/new/codex".into();
+        p.config.binary_path = updated_path.clone();
         s.save_backend_profile(SaveProfile {
             id: Some(p.id),
             expected_revision: Some(p.revision),
@@ -441,8 +445,8 @@ mod tests {
         })
         .unwrap();
         preferences = s.preferences().unwrap();
-        assert_eq!(preferences.codex_path, "/new/codex");
-        preferences.codex_path = " /new/codex ".into();
+        assert_eq!(preferences.codex_path, updated_path);
+        preferences.codex_path = format!(" {updated_path} ");
         let revision = s.backend_profile(DEFAULT_CODEX_PROFILE).unwrap().revision;
         s.save(&preferences, &[]).unwrap();
         s.save(&preferences, &[]).unwrap();

@@ -341,6 +341,13 @@ mod tests {
     #[test]
     fn restart_restores_settings_drafts_messages_and_marks_partial_reply() {
         let path = path("restart");
+        let codex_path = path
+            .parent()
+            .unwrap()
+            .join("custom tools")
+            .join("codex")
+            .to_string_lossy()
+            .into_owned();
         {
             let s = Storage::open(&path).unwrap();
             s.create("c", "main").unwrap();
@@ -350,7 +357,7 @@ mod tests {
                 tutor_id: Some("t".into()),
                 target_language: "ja".into(),
                 main_model: "saved-model".into(),
-                codex_path: "/custom tools/codex".into(),
+                codex_path: codex_path.clone(),
                 ..Default::default()
             };
             s.save(
@@ -379,7 +386,7 @@ mod tests {
         let s = Storage::open(&path).unwrap();
         let w = s.load().unwrap();
         assert_eq!(w.preferences.main_model, "saved-model");
-        assert_eq!(w.preferences.codex_path, "/custom tools/codex");
+        assert_eq!(w.preferences.codex_path, codex_path);
         assert_eq!(w.tutor.unwrap().draft, "مرحبا café 日本語");
         let c = w.main.unwrap();
         assert_eq!(c.thread_id.as_deref(), Some("upstream-thread"));

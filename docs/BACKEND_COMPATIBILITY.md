@@ -38,4 +38,14 @@
 
 `0.4.0-alpha.1` 已在隔离的 Ubuntu 24.04 amd64 环境通过 APT 实际安装并运行。环境未安装 Node、Codex 或 Claude Code；真实 Tauri/WebKit 窗口配合本机 Responses fixture，完成系统凭据库保存与应用重启读取、两侧对话、一侧停止而另一侧完成、选词解释保存、离线复习、JSON v2 导出及去重导入、再次重启与来源跳转。数据库完整性和外键检查通过。
 
-这证明安装包的本地学习与 API 接入链路，不代表已通过真实 OpenAI 服务验收。中文通过剪贴板输入，实际输入法、CLI 与 API 的完整安装版组合，以及 Windows/macOS 原生运行仍待验证。系统凭据库实测为 Linux GNOME Keyring Secret Service，其他平台凭据库不能据此视为已验证。
+这证明安装包的本地学习与 API 接入链路，不代表已通过真实 OpenAI 服务验收。该学习闭环最初使用剪贴板；后续另以 IBus 真实拼音输入验证中文候选、主辅面板组合输入回车不误发、换行和重启草稿恢复。CLI 与 API 的完整安装版组合，以及 Windows/macOS 原生运行仍待验证。系统凭据库实测为 Linux GNOME Keyring Secret Service，其他平台凭据库不能据此视为已验证。
+
+## 平台检查范围
+
+| 平台               | 已取得的证据                                                                                                | 尚未证明                                                     |
+| ------------------ | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Ubuntu 24.04 amd64 | CI 格式、类型、Clippy、测试、Tauri 构建；APT 安装后的 API 学习闭环；GNOME Keyring；X11/Xvfb + IBus 拼音输入 | Wayland、其他输入法、完整 CLI/API 组合及真实厂商             |
+| macOS              | 首次多后端 CI 的检查、测试和 Tauri 调试构建通过                                                             | 原生窗口操作、Keychain、CLI 进程与终端行为；安装包           |
+| Windows            | 首次 CI 的前端与 Clippy 通过；两项存储测试的 Unix 路径夹具已改为平台绝对路径，后续状态见 CI                 | 原生窗口操作、Credential Manager、CLI 进程与终端行为；安装包 |
+
+[首次多后端 CI](https://github.com/KraHsu/parley/actions/runs/34859678767) 的提交为 `a24ab8c`，Windows 因测试路径夹具失败，不能把整次运行标为成功。修复后的三平台结果见验证分支的 [Workspace checks](https://github.com/KraHsu/parley/actions/workflows/ci.yml)。构建通过不等于原生运行验收完成。
