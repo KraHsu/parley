@@ -31,6 +31,8 @@ parley-cli -- resume --last
 
 ## 当前状态
 
+已发布的 v0.3.0 以 Codex 和词句学习为主。当前主分支正在开发多模型版本：已迁移至 Diesel，并接入 API、Codex 和 Claude Code GUI 的独立主辅面板。开发版的设置步骤见[模型服务指南](docs/BACKENDS.md)，已验证与待验证项目见[兼容记录](docs/BACKEND_COMPATIBILITY.md)。完整厂商实测及发布验收尚未完成。
+
 当前支持 **官方 Codex TUI + 独立语法助手 GUI**，也保留双面板桌面工作台；词句收藏、注释、备份和离线复习已实现。操作见[词句学习指南](docs/VOCABULARY.md)。
 
 - 固定视口的桌面工作台：左侧导航、中间对话/词句视图、右侧语言助手。页面本身不滚动，内容区域各自滚动。

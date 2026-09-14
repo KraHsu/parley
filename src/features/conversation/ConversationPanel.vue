@@ -170,7 +170,8 @@ function onKeydown(event: KeyboardEvent) {
       </div>
       <p v-if="lane.error" class="inline-error" role="alert">{{ lane.error }}</p>
       <p id="conversation-status" class="composer-caption">
-        <span class="tiny-dot" />{{ codex.isReady('main') ? codex.mainModel : '尚未连接 Codex'
+        <span class="tiny-dot" />{{
+          codex.isReady('main') ? codex.mainModel : codex.paneLabel('main')
         }}<button @click="$emit('connect')">
           连接设置<AppIcon name="arrow-right" :size="12" />
         </button>

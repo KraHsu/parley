@@ -139,7 +139,7 @@ function onKeydown(event: KeyboardEvent) {
       </div>
       <p v-if="lane.error" class="inline-error" role="alert">{{ lane.error }}</p>
       <p id="tutor-status" class="composer-caption">
-        {{ codex.isReady('tutor') ? codex.tutorModel : '辅导模型尚未连接' }}
+        {{ codex.isReady('tutor') ? codex.tutorModel : codex.paneLabel('tutor') }}
       </p>
     </div>
   </section>
