@@ -2,6 +2,7 @@
 import { computed, ref, toRef } from 'vue'
 import AppIcon from '../../shared/AppIcon.vue'
 import MessageList from '../codex/MessageList.vue'
+import ImportedContext from '../chat/ImportedContext.vue'
 import { useChatStore } from '../chat/store'
 const codex = useChatStore()
 const lane = codex.lanes.tutor
@@ -86,6 +87,7 @@ function onKeydown(event: KeyboardEvent) {
       </button>
     </div>
     <div class="tutor-scroll scroll-region" tabindex="0" aria-label="语言辅导内容">
+      <ImportedContext :messages="lane.context" />
       <MessageList
         pane="tutor"
         v-if="lane.messages.length"

@@ -25,6 +25,7 @@ export interface Conversation {
   status: string
   updatedAt: number
   messages: Message[]
+  context?: Pick<Message, 'role' | 'text' | 'status'>[]
   backend?: { profileId: string; profileRevision: number; kind: string } | null
 }
 export interface Lane {
@@ -32,6 +33,7 @@ export interface Lane {
   draft: string
   title: string
   messages: Message[]
+  context: NonNullable<Conversation['context']>
   busy: boolean
   error: string
   signature: string

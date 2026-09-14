@@ -3,6 +3,7 @@ import { ref, toRef } from 'vue'
 import { useSettingsStore } from '../settings/store'
 import AppIcon from '../../shared/AppIcon.vue'
 import MessageList from '../codex/MessageList.vue'
+import ImportedContext from '../chat/ImportedContext.vue'
 import { useChatStore } from '../chat/store'
 const codex = useChatStore()
 const lane = codex.lanes.main
@@ -102,6 +103,7 @@ function onKeydown(event: KeyboardEvent) {
     </header>
 
     <div class="conversation-scroll scroll-region" tabindex="0" aria-label="对话消息">
+      <ImportedContext :messages="lane.context" />
       <MessageList
         pane="main"
         v-if="lane.messages.length"

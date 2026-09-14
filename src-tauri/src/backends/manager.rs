@@ -315,6 +315,7 @@ impl BackendState {
                 } else {
                     request.text.clone()
                 };
+                let input = storage.initial_context_input(&request.conversation_id, &input)?;
                 let signature = format!(
                     "{}|{}|{}|{}",
                     request.model, request.target_language, request.native_language, request.mode

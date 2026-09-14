@@ -231,7 +231,7 @@ pub(super) async fn send(
     );
     let prepare = request.clone();
     let signature_copy = signature.clone();
-    let (profile, saved, thread, generation, previous_turn) = blocking(c, move |c| {
+    let (profile, saved, thread, generation, previous_turn, input) = blocking(c, move |c| {
         let profile = c.storage.backend_profile(&c.profile.profile_id)?;
         if !profile.config.enabled || profile.revision != c.profile.profile_revision {
             return Err("Codex 服务配置已更改或停用，请重新连接后再发送。".into());
@@ -250,6 +250,9 @@ pub(super) async fn send(
         if !saved.signature.is_empty() && saved.signature != signature_copy {
             return Err("会话设置已变更，请新建对话。".into());
         }
+        let input = c
+            .storage
+            .initial_context_input(&prepare.conversation_id, &tutor_input(&prepare))?;
         let mut lane = c.lanes[index].lock().unwrap();
         if lane.active {
             return Err("当前面板仍在回复中。".into());
@@ -274,7 +277,14 @@ pub(super) async fn send(
         lane.publication = None;
         lane.request_id = Some(prepare.message_id.clone());
         lane.conversation = Some(prepare.conversation_id.clone());
-        Ok((profile, saved, thread, lane.generation, previous_turn))
+        Ok((
+            profile,
+            saved,
+            thread,
+            lane.generation,
+            previous_turn,
+            input,
+        ))
     })
     .await?;
     let result: Reply = async {
@@ -286,7 +296,7 @@ pub(super) async fn send(
             id:uuid::Uuid::new_v4().to_string(), conversation_id:request.conversation_id.clone(), profile,
             auth_scope:format!("codex:{}",crate::vocabulary::digest(email.as_deref().unwrap_or("unconfirmed"))),
             model:request.model.clone(), user_id:request.message_id.clone(), assistant_id:uuid::Uuid::new_v4().to_string(),
-            text:request.text.clone(),input:tutor_input(&request),target:request.target_language.clone(),native:request.native_language.clone(),mode:request.mode.clone(),signature:signature.clone(),
+            text:request.text.clone(),input:input.clone(),target:request.target_language.clone(),native:request.native_language.clone(),mode:request.mode.clone(),signature:signature.clone(),
         };
         let receipt = json!({"turnId":turn.id,"messageId":turn.assistant_id});
         let pane = request.pane.clone();
@@ -317,7 +327,7 @@ pub(super) async fn send(
             }
         };
         if blocking(c,move |c| Ok(c.lanes[index].lock().unwrap().cancel)).await? { return Err("已停止发送。".into()); }
-        let response = c.rpc("turn/start",json!({"threadId":thread,"model":request.model,"environments":[],"clientUserMessageId":request.message_id,"input":[{"type":"text","text":tutor_input(&request),"text_elements":[]}]})).await?;
+        let response = c.rpc("turn/start",json!({"threadId":thread,"model":request.model,"environments":[],"clientUserMessageId":request.message_id,"input":[{"type":"text","text":input,"text_elements":[]}]})).await?;
         let turn = response["turn"]["id"].as_str().ok_or("Codex 未返回轮次 ID")?.to_owned();
         let turn_copy = turn.clone();
         let cancel = blocking(c,move |c| {

@@ -10,6 +10,7 @@ type Document = Pick<
   Conversation,
   'id' | 'draft' | 'title' | 'messages' | 'signature' | 'status'
 > & {
+  context: NonNullable<Conversation['context']>
   backend: NonNullable<Conversation['backend']>
 }
 const emptyDocument = (): Document => ({
@@ -17,6 +18,7 @@ const emptyDocument = (): Document => ({
   draft: '',
   title: '新的对话',
   messages: [],
+  context: [],
   signature: '',
   status: 'idle',
   backend: { profileId: 'codex-default', profileRevision: 1, kind: 'codex' },
@@ -129,6 +131,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       title: conversation.title,
       draft: conversation.draft,
       messages: conversation.messages,
+      context: conversation.context ?? [],
       signature: conversation.signature,
       backend: conversation.backend ?? emptyDocument().backend,
       status: conversation.status,
@@ -146,7 +149,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     applying = false
     scheduleSave()
   }
-  async function create(pane: Pane, profileId = documents[pane].backend.profileId) {
+  async function create(
+    pane: Pane,
+    profileId = documents[pane].backend.profileId,
+    sourceId?: string,
+  ) {
     const id = crypto.randomUUID()
     if (!isDesktop())
       return {
@@ -164,7 +171,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         updatedAt: Date.now(),
         messages: [],
       } satisfies Conversation
-    return invoke<Conversation>('storage_create', { id, pane, profileId })
+    return invoke<Conversation>('storage_create', {
+      id,
+      pane,
+      profileId,
+      ...(sourceId ? { sourceId } : {}),
+    })
   }
   async function initialize() {
     if (initialized.value) return

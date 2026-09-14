@@ -251,7 +251,34 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let storage = StorageState::new(Ok(directory.path().join("runtime.sqlite3")));
         let store = storage.get().unwrap();
-        store.create("main", "main").unwrap();
+        for pane in ["main", "tutor"] {
+            let source = format!("source-{pane}");
+            store.create(&source, pane).unwrap();
+            store
+                .begin(
+                    &source,
+                    &format!("seed-{pane}"),
+                    "carried visible practice word",
+                    crate::storage::ConversationConfig {
+                        model: "old-model",
+                        target: "en",
+                        native: "zh-CN",
+                        mode: "conversation",
+                    },
+                )
+                .unwrap();
+            store.event(&source,"item/completed",&json!({"item":{"id":"old-item","type":"agentMessage","text":"visible earlier answer"}})).unwrap();
+            store
+                .event(
+                    &source,
+                    "turn/completed",
+                    &json!({"turn":{"status":"completed"}}),
+                )
+                .unwrap();
+        }
+        store
+            .create_with_context("main", "main", DEFAULT_CODEX_PROFILE, Some("source-main"))
+            .unwrap();
         let codex_profile = store.backend_profile(DEFAULT_CODEX_PROFILE).unwrap();
         let state = BackendState::default();
         let (mut c, peer, _) = super::super::tests::test_client();
@@ -276,6 +303,18 @@ mod tests {
                     }
                     "thread/start" => json!({"thread":{"id":"codex-thread"}}),
                     "turn/start" => {
+                        assert!(
+                            frame["params"]["input"][0]["text"]
+                                .as_str()
+                                .unwrap()
+                                .contains("carried visible practice word")
+                        );
+                        assert!(
+                            !frame["params"]["input"][0]["text"]
+                                .as_str()
+                                .unwrap()
+                                .contains("old-item")
+                        );
                         protocol.incoming(json!({"method":"turn/started","params":{"threadId":"codex-thread","turn":{"id":"codex-turn"}}})).await;
                         protocol.incoming(json!({"method":"item/agentMessage/delta","params":{"threadId":"codex-thread","turnId":"codex-turn","itemId":"codex-item","delta":"Codex partial"}})).await;
                         json!({"turn":{"id":"codex-turn"}})
@@ -340,6 +379,14 @@ mod tests {
             assert!(length < 32000);
             let mut body = vec![0; length];
             socket.read_exact(&mut body).await.unwrap();
+            let sent: Value = serde_json::from_slice(&body).unwrap();
+            assert!(
+                sent["input"][0]["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("carried visible practice word")
+            );
+            assert!(!sent.to_string().contains("old-item"));
             assert_eq!(
                 serde_json::from_slice::<Value>(&body).unwrap()["model"],
                 "fixture-model"
@@ -366,7 +413,9 @@ mod tests {
                 },
             })
             .unwrap();
-        store.create_for_backend("tutor", "tutor", &api.id).unwrap();
+        store
+            .create_with_context("tutor", "tutor", &api.id, Some("source-tutor"))
+            .unwrap();
         state
             .credentials
             .set(&store, &api, "fixture-key".into(), false)

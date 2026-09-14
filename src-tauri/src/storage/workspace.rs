@@ -53,6 +53,7 @@ impl ConversationRow {
             status: self.status,
             updated_at: self.updated_at,
             messages: Vec::new(),
+            context: Vec::new(),
             backend,
         })
     }
@@ -158,6 +159,7 @@ impl Storage {
             Ok(())
         })
     }
+    #[cfg(test)]
     pub fn create(&self, id: &str, pane: &str) -> Result<Conversation> {
         self.create_for_backend(id, pane, DEFAULT_CODEX_PROFILE)
     }
@@ -201,6 +203,7 @@ impl Storage {
     }
     pub fn read(&self, id: &str) -> Result<Conversation> {
         let mut conversation = self.read_metadata(id)?;
+        conversation.context = self.typed(|db| super::context::read(db, id))?;
         conversation.messages = self.typed(|db| {
             m::table
                 .left_join(

@@ -830,7 +830,7 @@ mod tests {
             .execute(&mut legacy)
             .unwrap();
         super::super::migrate(&mut legacy).unwrap();
-        assert_eq!(super::super::schema_version(&mut legacy).unwrap(), 6);
+        assert_eq!(super::super::schema_version(&mut legacy).unwrap(), 7);
         assert_eq!(
             text(&mut legacy, "SELECT value FROM preferences"),
             r#"{"targetLanguage":"ja"}"#

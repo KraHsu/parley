@@ -213,11 +213,21 @@ impl Storage {
             Ok(())
         })
     }
+    #[cfg(test)]
     pub fn create_for_backend(
         &self,
         id: &str,
         pane: &str,
         profile_id: &str,
+    ) -> Result<Conversation> {
+        self.create_with_context(id, pane, profile_id, None)
+    }
+    pub fn create_with_context(
+        &self,
+        id: &str,
+        pane: &str,
+        profile_id: &str,
+        source_id: Option<&str>,
     ) -> Result<Conversation> {
         use super::schema::{conversation_backends as b, conversations as c};
         use diesel::prelude::*;
@@ -229,6 +239,9 @@ impl Storage {
             if !profile.config.enabled {
                 return Err("该模型服务已停用。".into());
             }
+            let snapshot = source_id
+                .map(|source| super::context::snapshot(db, source, pane))
+                .transpose()?;
             diesel::insert_into(c::table)
                 .values((
                     c::id.eq(id),
@@ -249,6 +262,15 @@ impl Storage {
                     b::profile_revision.eq(profile.revision),
                 ))
                 .execute(db)?;
+            if let Some(snapshot) = snapshot {
+                use super::schema::conversation_context as context;
+                diesel::insert_into(context::table)
+                    .values((
+                        context::conversation_id.eq(id),
+                        context::messages.eq(snapshot),
+                    ))
+                    .execute(db)?;
+            }
             Ok(())
         })?;
         self.read(id)
@@ -264,7 +286,7 @@ mod tests {
 
     #[test]
     fn upgrade_creates_a_readable_pre_migration_backup() {
-        for version in [3, 4, 5] {
+        for version in [3, 4, 5, 6] {
             check_upgrade_backup(version);
         }
     }
@@ -288,7 +310,7 @@ mod tests {
                 p.file_name()
                     .unwrap()
                     .to_string_lossy()
-                    .starts_with("parley-before-v6-")
+                    .starts_with("parley-before-v7-")
             })
             .collect();
         assert_eq!(backups.len(), 1);

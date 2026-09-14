@@ -19,6 +19,12 @@ const busy = ref(false)
 const error = ref('')
 const notice = ref('')
 const showingForm = ref(false)
+const switching = ref<{
+  pane: 'main' | 'tutor'
+  profileId: string
+  revision: number
+  sourceId: string
+}>()
 const available = computed(() =>
   backends.profiles.filter(
     (p) => p.config.enabled && (p.config.kind === 'codex' || supportsManagedTurns(p.config.kind)),
@@ -27,6 +33,7 @@ const available = computed(() =>
 const editable = computed(() => backends.profiles.filter((p) => p.id !== 'codex-default'))
 const clearKey = () => {
   key.value = ''
+  switching.value = undefined
 }
 function cancelForm() {
   showingForm.value = false
@@ -90,8 +97,37 @@ async function removeKey(profile: BackendProfile) {
   }
 }
 async function select(pane: 'main' | 'tutor', event: Event) {
-  await chat.selectBackend(pane, (event.target as HTMLSelectElement).value)
-  ;(event.target as HTMLSelectElement).value = chat.lanes[pane].backend.profileId
+  const profileId = (event.target as HTMLSelectElement).value
+  const lane = chat.lanes[pane]
+  ;(event.target as HTMLSelectElement).value = lane.backend.profileId
+  const profile = backends.profiles.find((p) => p.id === profileId)
+  if (
+    !profile ||
+    (profileId === lane.backend.profileId && profile.revision === lane.backend.profileRevision)
+  )
+    return
+  if (lane.context.length || lane.messages.some((m) => m.text.trim())) {
+    switching.value = { pane, profileId, revision: profile.revision, sourceId: lane.id }
+  } else await chat.selectBackend(pane, profileId)
+}
+async function switchConversation(carry: boolean) {
+  const choice = switching.value
+  if (!choice || chat.navigating) return
+  if (
+    chat.lanes[choice.pane].id !== choice.sourceId ||
+    backends.profiles.find((p) => p.id === choice.profileId)?.revision !== choice.revision
+  ) {
+    error.value = '会话或服务配置已改变，请重新选择。'
+    switching.value = undefined
+    return
+  }
+  await chat.selectBackend(choice.pane, choice.profileId, carry)
+  if (
+    chat.lanes[choice.pane].backend.profileId === choice.profileId &&
+    chat.lanes[choice.pane].id !== choice.sourceId
+  )
+    switching.value = undefined
+  else error.value = chat.lanes[choice.pane].error
 }
 function profileLabel(id: string) {
   return backends.profiles.find((p) => p.id === id)?.config.name ?? '已归档的服务'
@@ -121,7 +157,7 @@ function modelChoices(pane: 'main' | 'tutor') {
           {{ pane === 'main' ? '主聊服务' : '语言助手服务' }}
           <select
             :value="chat.lanes[pane].backend.profileId"
-            :disabled="!chat.initialized || chat.lanes[pane].busy || chat.navigating"
+            :disabled="!chat.initialized || chat.lanes[pane].busy || chat.navigating || !!switching"
             @change="select(pane, $event)"
           >
             <option
@@ -136,6 +172,39 @@ function modelChoices(pane: 'main' | 'tutor') {
             </option>
           </select>
         </label>
+        <section
+          v-if="switching && switching.pane === pane"
+          class="settings-section"
+          aria-label="选择新会话的历史"
+        >
+          <p>
+            将{{ switching.pane === 'main' ? '主聊' : '语言助手' }}切换到
+            {{ profileLabel(switching.profileId) }}。
+          </p>
+          <p class="settings-help">
+            可带入当前可见的文字历史，首次提问时发送给新服务。旧会话仍保留；中断内容带有状态标记。最多
+            200 条、24 KiB，超过时请选择空白会话。
+          </p>
+          <div class="settings-actions">
+            <button
+              class="secondary-button"
+              :disabled="chat.navigating"
+              @click="switchConversation(false)"
+            >
+              空白新会话
+            </button>
+            <button
+              class="primary-button"
+              :disabled="chat.navigating"
+              @click="switchConversation(true)"
+            >
+              带入可见历史
+            </button>
+            <button class="text-button" :disabled="chat.navigating" @click="switching = undefined">
+              取消
+            </button>
+          </div>
+        </section>
         <label v-if="chat.lanes[pane].backend.kind !== 'codex'" class="settings-field">
           {{ pane === 'main' ? '主聊模型 ID' : '语言助手模型 ID' }}
           <input
@@ -155,6 +224,21 @@ function modelChoices(pane: 'main' | 'tutor') {
             <option v-for="model in modelChoices(pane)" :key="model" :value="model" />
           </datalist>
         </label>
+        <p
+          v-if="
+            chat.lanes[pane].context.length || chat.lanes[pane].messages.some((m) => m.text.trim())
+          "
+          class="settings-help"
+        >
+          <button
+            class="secondary-button"
+            :disabled="!!switching || chat.lanes[pane].busy || chat.navigating"
+            @click="chat.selectBackend(pane, chat.lanes[pane].backend.profileId, true)"
+          >
+            {{ pane === 'main' ? '主聊' : '助手' }}：带入历史并使用当前模型
+          </button>
+          创建新会话，历史在下一次提问时发送。
+        </p>
         <p v-if="staleBinding(pane)" class="settings-help">
           此会话使用旧配置。
           <button
@@ -166,6 +250,7 @@ function modelChoices(pane: 'main' | 'tutor') {
           </button>
         </p>
       </template>
+
       <p class="settings-help">
         更换服务会开启新会话，旧记录保留。未提供余额查询的 API 不显示剩余额度。
       </p>

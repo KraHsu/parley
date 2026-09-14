@@ -567,6 +567,60 @@ describe('API conversation routing', () => {
     store.mainModel = 'manual-api-model'
     return store
   }
+  it('carries history only by explicit source reference and preserves the unsent draft', async () => {
+    const store = await setup()
+    store.lanes.tutor.draft = 'my unsent question'
+    store.lanes.tutor.messages = [
+      { id: 'old-answer', role: 'assistant', text: 'old visible text', status: 'complete' },
+    ]
+    mock.invoke.mockImplementation(async (method, args) => {
+      if (method === 'storage_create')
+        return {
+          ...conversation(args.id, args.pane),
+          backend: { profileId: args.profileId, profileRevision: 1, kind: 'openai_responses' },
+          context: args.sourceId
+            ? [{ role: 'assistant', text: 'old visible text', status: 'complete' }]
+            : [],
+        }
+      return defaultInvoke(method, args)
+    })
+    await store.selectBackend('tutor', 'api', true)
+    expect(mock.invoke).toHaveBeenCalledWith(
+      'storage_create',
+      expect.objectContaining({ pane: 'tutor', profileId: 'api', sourceId: 'tutor' }),
+    )
+    expect(store.lanes.tutor.context[0]?.text).toBe('old visible text')
+    expect(store.lanes.tutor.messages).toEqual([])
+    expect(store.lanes.tutor.draft).toBe('my unsent question')
+    // The same choice also supports changing model or credentials within this profile.
+    const previous = store.lanes.tutor.id
+    store.tutorModel = 'new-model'
+    mock.invoke.mockClear()
+    await store.selectBackend('tutor', 'api', true)
+    expect(mock.invoke).toHaveBeenCalledWith(
+      'storage_create',
+      expect.objectContaining({ profileId: 'api', sourceId: previous }),
+    )
+    expect(store.tutorModel).toBe('new-model')
+    expect(mock.invoke.mock.calls.some(([method]) => method === 'backend_send')).toBe(false)
+  })
+  it('leaves the old conversation and draft selected if carrying history fails', async () => {
+    const store = await setup()
+    store.lanes.tutor.draft = 'keep this'
+    mock.invoke.mockImplementation(async (method, args) => {
+      if (method === 'storage_create') throw Error('历史超过可带入上限')
+      return defaultInvoke(method, args)
+    })
+    await store.selectBackend('tutor', 'api', true)
+    expect(store.lanes.tutor.id).toBe('tutor')
+    expect(store.lanes.tutor.draft).toBe('keep this')
+    expect(store.lanes.tutor.error).toContain('上限')
+    expect(store.navigating).toBe(false)
+    mock.invoke.mockClear()
+    await store.selectBackend('tutor', 'api')
+    const args = mock.invoke.mock.calls.find(([method]) => method === 'storage_create')![1]
+    expect(args.sourceId).toBeUndefined()
+  })
   it('isolates concurrent Codex and API replies and ignores stale projections', async () => {
     const store = await setup()
     await Promise.all([store.send('main', 'Hello API'), store.send('tutor', 'Explain hello')])

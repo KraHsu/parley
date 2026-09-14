@@ -488,20 +488,21 @@ export const useChatStore = defineStore('chat', () => {
       navigating.value = false
     }
   }
-  async function selectBackend(pane: Pane, profileId: string) {
+  async function selectBackend(pane: Pane, profileId: string, carryHistory = false) {
     if (navigating.value || closing.value || !initialized.value || lanes[pane].busy) return
     const profile = backends.profiles.find((p) => p.id === profileId && p.config.enabled)
     if (!profile) return
     if (
       profileId === lanes[pane].backend.profileId &&
-      profile.revision === lanes[pane].backend.profileRevision
+      profile.revision === lanes[pane].backend.profileRevision &&
+      !carryHistory
     )
       return
     navigating.value = true
     try {
       if (!(await flush())) return
       const changing = profileId !== lanes[pane].backend.profileId
-      const conversation = await create(pane, profileId)
+      const conversation = await create(pane, profileId, carryHistory ? lanes[pane].id : undefined)
       if (!(await flush()) || closing.value) return
       const draft = lanes[pane].draft
       adopt(pane, conversation)

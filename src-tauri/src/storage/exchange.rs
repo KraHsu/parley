@@ -616,7 +616,7 @@ mod tests {
         let mut db = storage.db.lock().unwrap();
         // Recreate the exact previous schema, without changing historical import keys.
         db.batch_execute(
-            "ALTER TABLE vocabulary_occurrences DROP COLUMN backend; PRAGMA user_version=5;",
+            "DROP TABLE conversation_context; ALTER TABLE vocabulary_occurrences DROP COLUMN backend; PRAGMA user_version=5;",
         )
         .unwrap();
     }

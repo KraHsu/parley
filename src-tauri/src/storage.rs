@@ -1,5 +1,6 @@
 pub mod api;
 pub mod backends;
+mod context;
 pub mod exchange;
 mod learning_rows;
 pub mod review;
@@ -9,6 +10,7 @@ mod typed;
 pub mod vocabulary;
 mod workspace;
 use crate::backends::types::{ConversationBackend, DEFAULT_CODEX_PROFILE};
+pub use context::ContextMessage;
 use diesel::{Connection, RunQueryDsl, SqliteConnection, connection::SimpleConnection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -27,6 +29,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/004_model_backends.sql"),
     include_str!("../migrations/005_api_turns.sql"),
     include_str!("../migrations/006_source_backends.sql"),
+    include_str!("../migrations/007_conversation_context.sql"),
 ];
 
 #[derive(Clone)]
@@ -129,6 +132,8 @@ pub struct Conversation {
     pub status: String,
     pub updated_at: i64,
     pub messages: Vec<Message>,
+    #[serde(default)]
+    pub context: Vec<ContextMessage>,
     pub backend: Option<ConversationBackend>,
 }
 #[derive(Serialize)]
@@ -277,11 +282,16 @@ pub async fn storage_create(
     id: String,
     pane: String,
     profile_id: Option<String>,
+    source_id: Option<String>,
 ) -> Result<Conversation> {
     let s = storage.get()?;
-    tauri::async_runtime::spawn_blocking(move || match profile_id {
-        Some(profile) => s.create_for_backend(&id, &pane, &profile),
-        None => s.create(&id, &pane),
+    tauri::async_runtime::spawn_blocking(move || {
+        s.create_with_context(
+            &id,
+            &pane,
+            profile_id.as_deref().unwrap_or(DEFAULT_CODEX_PROFILE),
+            source_id.as_deref(),
+        )
     })
     .await
     .map_err(error)?

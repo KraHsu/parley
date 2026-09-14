@@ -38,6 +38,13 @@ diesel::table! {
 }
 
 diesel::table! {
+    conversation_context (conversation_id) {
+        conversation_id -> Text,
+        messages -> Text,
+    }
+}
+
+diesel::table! {
     conversations (id) {
         rowid -> BigInt,
         id -> Text,
