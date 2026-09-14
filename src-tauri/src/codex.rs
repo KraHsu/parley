@@ -1,4 +1,5 @@
 //! A narrow, local stdio client for the official Codex App Server.
+use crate::backends::types::{BackendKind, DEFAULT_CODEX_PROFILE};
 use crate::storage::{Storage, StorageState};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -85,6 +86,7 @@ struct Client {
     lanes: [Mutex<Lane>; 2],
     cwd: PathBuf,
     storage: Storage,
+    profile_revision: i64,
 }
 impl Client {
     fn emit(&self, method: &str, params: Value) {
@@ -95,7 +97,7 @@ impl Client {
             for (_, sender) in self.pending.lock().unwrap().drain() {
                 let _ = sender.send(Err(reason.to_owned()));
             }
-            if let Err(e) = self.storage.interrupt_all() {
+            if let Err(e) = self.storage.interrupt_backend(DEFAULT_CODEX_PROFILE) {
                 self.emit("storage/error", json!({"message":e}));
             }
             for lane in &self.lanes {
@@ -225,6 +227,7 @@ impl Client {
                     {
                         let mut p = params.clone();
                         p["pane"] = json!(if index == 0 { "main" } else { "tutor" });
+                        p["conversationId"] = json!(lane.conversation);
                         self.emit(method, p);
                     }
                 }
@@ -281,7 +284,14 @@ pub async fn codex_connect(
     std::fs::create_dir_all(&cwd).map_err(|e| e.to_string())?;
     let storage = app.state::<StorageState>().get()?;
     // Recover any interrupted markers that could not be saved during a disk error.
-    storage.interrupt_all()?;
+    let profile = storage.backend_profile(DEFAULT_CODEX_PROFILE)?;
+    if !profile.config.enabled {
+        return Err("本机 Codex 配置已停用。".into());
+    }
+    if profile.config.binary_path != codex_path.trim() {
+        return Err("Codex 路径与保存的配置不同，请先保存设置再连接。".into());
+    }
+    storage.interrupt_backend(DEFAULT_CODEX_PROFILE)?;
     let client = launch(binary, cwd, events, storage).await?;
     *state.client.lock().unwrap() = Some(client.clone());
     initialize(&client).await
@@ -292,6 +302,7 @@ async fn launch(
     events: Channel<Value>,
     storage: Storage,
 ) -> Result<Arc<Client>, String> {
+    let profile_revision = storage.backend_profile(DEFAULT_CODEX_PROFILE)?.revision;
     let mut version_command = Command::from(crate::launcher::codex_command(&binary));
     version_command
         .arg("--version")
@@ -350,7 +361,7 @@ async fn launch(
     let child = command
         .spawn()
         .map_err(|e| format!("无法启动 Codex：{e}。请在设置中检查你选择的 Codex 可执行文件。"))?;
-    supervise(child, cwd, events, storage, runtime)
+    supervise(child, cwd, events, storage, runtime, profile_revision)
 }
 
 fn supervise(
@@ -359,6 +370,7 @@ fn supervise(
     events: Channel<Value>,
     storage: Storage,
     runtime: String,
+    profile_revision: i64,
 ) -> Result<Arc<Client>, String> {
     let stdout = child.stdout.take().ok_or("Codex 输出通道不可用")?;
     let stderr = child.stderr.take().ok_or("Codex 错误通道不可用")?;
@@ -381,6 +393,7 @@ fn supervise(
         lanes: Default::default(),
         cwd,
         storage,
+        profile_revision,
     });
     client.emit("connection/notice", json!({"message":runtime}));
     let reader = client.clone();
@@ -770,6 +783,10 @@ pub async fn codex_send(state: State<'_, CodexState>, request: MessageRequest) -
     send_message(&c, request).await
 }
 async fn send_message(c: &Arc<Client>, request: MessageRequest) -> Reply {
+    let profile = c.storage.backend_profile(DEFAULT_CODEX_PROFILE)?;
+    if !profile.config.enabled || profile.revision != c.profile_revision {
+        return Err("Codex 服务配置已更改或停用，请重新连接后再发送。".into());
+    }
     let index = pane_index(&request.pane)?;
     if request.text.trim().is_empty() || request.text.len() > 32000 {
         return Err("消息不能为空，且不能超过 32 KB。".into());
@@ -782,6 +799,11 @@ async fn send_message(c: &Arc<Client>, request: MessageRequest) -> Reply {
         return Err("终端上下文过长，请缩小选段。".into());
     }
     let saved = c.storage.read(&request.conversation_id)?;
+    if !saved.backend.as_ref().is_some_and(|binding| {
+        binding.profile_id == DEFAULT_CODEX_PROFILE && binding.kind == BackendKind::Codex
+    }) {
+        return Err("该会话属于其他模型服务，请选择对应后端或新建对话。".into());
+    }
     if saved.pane != request.pane || request.message_id.is_empty() || request.message_id.len() > 100
     {
         return Err("会话或消息标识无效。".into());
@@ -971,6 +993,7 @@ mod tests {
                 lanes: Default::default(),
                 cwd: std::env::temp_dir(),
                 storage: test_storage(),
+                profile_revision: 1,
             }),
             peer,
             captured,
@@ -1008,6 +1031,7 @@ mod tests {
             events,
             test_storage(),
             "实际 CLI：codex-cli 0.145.0\n执行文件：/fixture/codex".into(),
+            1,
         )
         .unwrap();
         (client, captured)
@@ -1211,6 +1235,29 @@ mod tests {
         assert_eq!(a.await.unwrap().unwrap(), "first");
         assert_eq!(b.await.unwrap().unwrap(), "second");
     }
+    #[tokio::test]
+    async fn changed_profile_cannot_send_through_an_old_connection() {
+        let (c, _peer, _) = test_client();
+        let mut profile = c.storage.backend_profile(DEFAULT_CODEX_PROFILE).unwrap();
+        profile.config.name = "Changed configuration".into();
+        c.storage
+            .save_backend_profile(crate::backends::types::SaveProfile {
+                id: Some(profile.id),
+                expected_revision: Some(profile.revision),
+                config: profile.config,
+            })
+            .unwrap();
+        let request = serde_json::from_value(json!({
+            "pane":"main", "conversationId":"main", "messageId":"unsubmitted", "text":"hello",
+            "model":"test", "targetLanguage":"en", "nativeLanguage":"zh-CN", "mode":"conversation"
+        }))
+        .unwrap();
+        let result = send_message(&c, request).await.unwrap_err();
+        assert!(result.contains("重新连接"));
+        assert!(c.storage.read("main").unwrap().messages.is_empty());
+        assert!(!c.lanes[0].lock().unwrap().active);
+    }
+
     #[tokio::test]
     async fn streams_are_routed_and_completion_releases_only_its_lane() {
         let (c, _peer, events) = test_client();

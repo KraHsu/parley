@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { useCodexStore } from '../codex/store'
+import { useChatStore } from '../chat/store'
 import { useSettingsStore } from '../settings/store'
 import StudyText from '../vocabulary/StudyText.vue'
 import type { VocabularySource } from '../vocabulary/types'
@@ -13,7 +13,7 @@ import {
   type TerminalMessage,
 } from './context'
 const props = defineProps<{ startedAt: number }>()
-const codex = useCodexStore()
+const codex = useChatStore()
 const settings = useSettingsStore()
 const threads = ref<TerminalThread[]>([])
 const messages = ref<TerminalMessage[]>([])
@@ -175,13 +175,13 @@ onUnmounted(() => {
     <div class="terminal-context-actions">
       <button
         class="secondary-button"
-        :disabled="!codex.ready || !codex.terminalContext || codex.lanes.tutor.busy"
+        :disabled="!codex.isReady('tutor') || !codex.terminalContext || codex.lanes.tutor.busy"
         @click="ask('explain')"
       >
         解释{{ selection ? '选中片段' : '当前回复' }}</button
       ><button
         class="secondary-button"
-        :disabled="!codex.ready || !codex.terminalContext || codex.lanes.tutor.busy"
+        :disabled="!codex.isReady('tutor') || !codex.terminalContext || codex.lanes.tutor.busy"
         @click="ask('translate')"
       >
         翻译</button

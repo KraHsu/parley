@@ -5,6 +5,8 @@
   "windows": ["main"],
   "permissions": [
     "allow-get-runtime-info",
+    "allow-backend-profiles",
+    "allow-backend-save-profile",
     "allow-get-launch-options",
     "allow-codex-connect",
     "allow-codex-disconnect",

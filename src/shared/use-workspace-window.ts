@@ -1,14 +1,14 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { useCodexStore } from '../features/codex/store'
+import { useChatStore } from '../features/chat/store'
 import { isDesktop } from './desktop'
 import { closeWorkspace } from './window-close'
 import { useVocabularyStore } from '../features/vocabulary/store'
 import { settleWordOperations } from './word-operations'
 
 export function useWorkspaceWindow(beforeClose: () => void, afterLoad?: () => Promise<void>) {
-  const codex = useCodexStore()
+  const codex = useChatStore()
   const vocabulary = useVocabularyStore()
   const closeError = ref('')
   let unlisten: (() => void) | undefined

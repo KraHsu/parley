@@ -107,6 +107,8 @@ npm run dev
 
 详细安排见 [开发计划](docs/DEVELOPMENT_PLAN.md)，实现边界见 [架构设计](docs/ARCHITECTURE.md)，开发操作见 [开发指南](docs/DEVELOPMENT.md)。
 
+正在按 [多模型后端开发计划](docs/MULTI_BACKEND_PLAN.md) 扩展主流模型 API、Codex 与 Claude Code，以及主聊和语言助手独立选择后端。该功能尚未发布，进度见 [实现记录](docs/MULTI_BACKEND_IMPLEMENTATION.md)。
+
 ## 开源许可
 
 采用 [MIT License](LICENSE)。项目当前以免费开源方式开发；MIT 同时允许他人按许可条款使用和修改代码，包括商业使用。代码许可不代替 OpenAI 服务条款，用户仍需拥有适用的服务访问资格。

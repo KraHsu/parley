@@ -2,7 +2,9 @@
 
 ## 当前实现与目标架构
 
-当前已实现 Vue 工作台、Rust Codex stdio 客户端、官方登录、两个独立流式对话、SQLite 工作区存储和 Codex thread 恢复。词句学习数据仍为后续设计，当前表结构见 [持久化说明](PERSISTENCE.md)。具体实现与限制见 [Codex 接入说明](CODEX_INTEGRATION.md)。
+当前已实现 Vue 工作台、Rust Codex stdio 客户端、官方登录、两个独立流式对话、SQLite 工作区存储和 Codex thread 恢复；词句收藏、备份和离线复习也已实现，见 [词句实现记录](VOCABULARY_IMPLEMENTATION.md)。工作区存储见 [持久化说明](PERSISTENCE.md)，具体接入与限制见 [Codex 接入说明](CODEX_INTEGRATION.md)。
+
+下文保留早期 Codex 架构设计，数据库以实际 SQL 迁移为准。下一阶段的通用会话层、API 与双 CLI 适配、数据迁移详见 [多模型后端开发计划](MULTI_BACKEND_PLAN.md)；开发进度见 [实现记录](MULTI_BACKEND_IMPLEMENTATION.md)。
 
 ```text
 Vue / Pinia
@@ -47,7 +49,7 @@ Rust application layer
 
 原始 Codex thread 是上游运行记录；本地消息表保存用户可见投影和学习引用。使用唯一上游 item ID 更新投影，避免重连后重复追加。只把已确认完成的状态当作完成，崩溃中的消息标为 interrupted。
 
-## 计划数据模型（M3）
+## 早期计划数据模型（M3，非当前数据库结构）
 
 | 表                       | 关键字段                                                                       | 关系/约束                                |
 | ------------------------ | ------------------------------------------------------------------------------ | ---------------------------------------- |
@@ -59,7 +61,7 @@ Rust application layer
 | `vocabulary_entries`     | id, language, text, lookup_key, meaning, note, mastery, created_at             | 原始拼写不破坏；归一化仅用于查询         |
 | `vocabulary_occurrences` | id, entry_id, source_message_id, sentence_snapshot, selection_metadata         | 同一词句可有多个语境；会话删除可保留快照 |
 
-所有写入通过 Rust repository 和事务。M3 建立正式 SQL、外键策略与迁移测试；当前不提前创建空库。
+所有写入通过 Rust repository 和事务。正式表结构已经建立，见 `src-tauri/migrations/`；上表仅保留初期设计背景。
 
 选择区间需明确字符偏移单位，不能混用 JavaScript UTF-16 与 Rust UTF-8 字节索引。首版保存原句与选中字符串；精确定位同时记录经验证的偏移和原文哈希，文本变化时回退到快照。
 

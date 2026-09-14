@@ -2,10 +2,10 @@
 import { nextTick, ref, watch } from 'vue'
 import { wordInvoke as invoke } from '../../shared/word-operations'
 import { useVocabularyStore } from './store'
-import { useCodexStore } from '../codex/store'
+import { useChatStore } from '../chat/store'
 import type { EntryPage, VocabularyEntry } from './types'
 const vocabulary = useVocabularyStore()
-const codex = useCodexStore()
+const codex = useChatStore()
 const dialog = ref<HTMLDialogElement>()
 const discardConfirm = ref(false)
 const related = ref<EntryPage['entries']>([])
@@ -182,7 +182,9 @@ async function explain() {
             type="button"
             class="secondary-button"
             :disabled="
-              !codex.ready || codex.lanes.tutor.busy || !vocabulary.editor.fields.text.trim()
+              !codex.isReady('tutor') ||
+              codex.lanes.tutor.busy ||
+              !vocabulary.editor.fields.text.trim()
             "
             @click="explain"
           >

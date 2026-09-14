@@ -1,6 +1,8 @@
+pub mod backends;
 pub mod exchange;
 pub mod review;
 pub mod vocabulary;
+use crate::backends::types::{ConversationBackend, DEFAULT_CODEX_PROFILE};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -11,6 +13,14 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::State;
+
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/001_workspace.sql"),
+    include_str!("../migrations/002_vocabulary.sql"),
+    include_str!("../migrations/003_vocabulary_review.sql"),
+    include_str!("../migrations/004_model_backends.sql"),
+];
+const CONVERSATION_SELECT: &str = "SELECT c.id,c.pane,c.title,c.model,c.target_language,c.native_language,c.mode,c.draft,c.thread_id,c.account,c.signature,c.status,c.updated_at,b.profile_id,b.profile_revision,json_extract(v.config,'$.kind') FROM conversations c LEFT JOIN conversation_backends b ON b.conversation_id=c.id LEFT JOIN backend_profile_versions v ON v.profile_id=b.profile_id AND v.revision=b.profile_revision";
 
 pub struct StorageState {
     path: std::result::Result<PathBuf, String>,
@@ -100,6 +110,7 @@ pub struct Conversation {
     pub status: String,
     pub updated_at: i64,
     pub messages: Vec<Message>,
+    pub backend: Option<ConversationBackend>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -128,11 +139,6 @@ fn migrate(db: &mut Connection) -> Result<()> {
     let version: i64 = db
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .map_err(error)?;
-    const MIGRATIONS: &[&str] = &[
-        include_str!("../migrations/001_workspace.sql"),
-        include_str!("../migrations/002_vocabulary.sql"),
-        include_str!("../migrations/003_vocabulary_review.sql"),
-    ];
     if version < 0 || version as usize > MIGRATIONS.len() {
         return Err("数据库来自更新版本的 Parley。请升级应用；原始数据未改动。".into());
     }
@@ -152,6 +158,23 @@ pub struct ConversationConfig<'a> {
     pub mode: &'a str,
 }
 fn conversation_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Conversation> {
+    let profile: Option<String> = r.get(13)?;
+    let backend = profile
+        .map(|profile_id| {
+            let kind: String = r.get(15)?;
+            Ok::<_, rusqlite::Error>(ConversationBackend {
+                profile_id,
+                profile_revision: r.get(14)?,
+                kind: serde_json::from_value(Value::String(kind)).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        15,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?,
+            })
+        })
+        .transpose()?;
     Ok(Conversation {
         id: r.get(0)?,
         pane: r.get(1)?,
@@ -167,6 +190,7 @@ fn conversation_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Conversation> {
         status: r.get(11)?,
         updated_at: r.get(12)?,
         messages: Vec::new(),
+        backend,
     })
 }
 impl Storage {
@@ -187,6 +211,21 @@ impl Storage {
         };
         let mut db = Connection::open(path).map_err(error)?;
         db.busy_timeout(Duration::from_secs(3)).map_err(error)?;
+        let version: i64 = db
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .map_err(error)?;
+        if path != Path::new(":memory:") && version > 0 && (version as usize) < MIGRATIONS.len() {
+            // VACUUM INTO includes committed WAL contents and leaves the source untouched.
+            let backup = path.with_file_name(format!(
+                "parley-before-v{}-{}.sqlite3",
+                MIGRATIONS.len(),
+                uuid::Uuid::new_v4()
+            ));
+            db.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])
+                .map_err(|_| {
+                    "升级前的数据库备份失败，原始数据未迁移。请检查磁盘空间和目录权限。".to_owned()
+                })?;
+        }
         // Version compatibility is checked before modifying an existing database.
         migrate(&mut db)?;
         db.execute_batch(
@@ -262,6 +301,7 @@ impl Storage {
                 }
             }
         }
+        backends::sync_codex_path(&tx, &p.codex_path)?;
         tx.execute("INSERT INTO preferences VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET value=excluded.value",[serde_json::to_string(p).map_err(error)?]).map_err(error)?;
         for draft in drafts {
             if draft.text.len() > 128000 {
@@ -281,15 +321,15 @@ impl Storage {
         tx.commit().map_err(error)
     }
     pub fn create(&self, id: &str, pane: &str) -> Result<Conversation> {
-        if id.is_empty() || id.len() > 100 || !["main", "tutor"].contains(&pane) {
-            return Err("会话标识无效。".into());
-        }
-        self.db.lock().unwrap().execute("INSERT INTO conversations(id,pane,mode,created_at,updated_at) VALUES(?1,?2,?3,?4,?4)",params![id,pane,if pane=="main" {"conversation"} else {"express"},now()]).map_err(error)?;
-        self.read(id)
+        self.create_for_backend(id, pane, DEFAULT_CODEX_PROFILE)
     }
     pub fn list(&self) -> Result<Vec<Conversation>> {
         let db = self.db.lock().unwrap();
-        let mut query=db.prepare("SELECT id,pane,title,model,target_language,native_language,mode,draft,thread_id,account,signature,status,updated_at FROM conversations ORDER BY updated_at DESC,rowid DESC").map_err(error)?;
+        let mut query = db
+            .prepare(&format!(
+                "{CONVERSATION_SELECT} ORDER BY c.updated_at DESC,c.rowid DESC"
+            ))
+            .map_err(error)?;
         query
             .query_map([], conversation_row)
             .map_err(error)?
@@ -297,7 +337,15 @@ impl Storage {
             .map_err(error)
     }
     fn read_metadata(&self, id: &str) -> Result<Conversation> {
-        self.db.lock().unwrap().query_row("SELECT id,pane,title,model,target_language,native_language,mode,draft,thread_id,account,signature,status,updated_at FROM conversations WHERE id=?1",[id],conversation_row).map_err(error)
+        self.db
+            .lock()
+            .unwrap()
+            .query_row(
+                &format!("{CONVERSATION_SELECT} WHERE c.id=?1"),
+                [id],
+                conversation_row,
+            )
+            .map_err(error)
     }
     pub fn read(&self, id: &str) -> Result<Conversation> {
         let mut c = self.read_metadata(id)?;
@@ -465,11 +513,15 @@ pub async fn storage_create(
     storage: State<'_, StorageState>,
     id: String,
     pane: String,
+    profile_id: Option<String>,
 ) -> Result<Conversation> {
     let s = storage.get()?;
-    tauri::async_runtime::spawn_blocking(move || s.create(&id, &pane))
-        .await
-        .map_err(error)?
+    tauri::async_runtime::spawn_blocking(move || match profile_id {
+        Some(profile) => s.create_for_backend(&id, &pane, &profile),
+        None => s.create(&id, &pane),
+    })
+    .await
+    .map_err(error)?
 }
 #[tauri::command]
 pub async fn storage_read(storage: State<'_, StorageState>, id: String) -> Result<Conversation> {

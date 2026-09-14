@@ -81,6 +81,49 @@ beforeEach(() => {
 const emit = (method: string, params: unknown, index = 0) =>
   mock.callbacks[index]!.onmessage({ method, params })
 describe('Codex workspace', () => {
+  it('ignores an old conversation event after switching the pane', async () => {
+    const store = useCodexStore()
+    await store.connect()
+    emit('item/agentMessage/delta', {
+      pane: 'main',
+      conversationId: 'different-conversation',
+      itemId: 'late',
+      delta: 'wrong answer',
+    })
+    expect(store.lanes.main.messages).toEqual([])
+    emit('item/completed', {
+      pane: 'main',
+      conversationId: 'main',
+      item: { id: 'final', text: 'saved answer' },
+    })
+    emit('item/agentMessage/delta', {
+      pane: 'main',
+      conversationId: 'main',
+      itemId: 'final',
+      delta: 'duplicate tail',
+    })
+    expect(store.lanes.main.messages[0]?.text).toBe('saved answer')
+  })
+  it('Codex disconnect leaves a different backend lane untouched', async () => {
+    const store = useCodexStore()
+    await store.connect()
+    store.lanes.tutor.backend = {
+      profileId: 'independent-api',
+      profileRevision: 1,
+      kind: 'openai_responses',
+    }
+    store.lanes.tutor.busy = true
+    store.lanes.tutor.messages.push({
+      id: 'api-answer',
+      role: 'assistant',
+      text: 'partial',
+      status: 'streaming',
+    })
+    emit('connection/closed', { message: 'Codex exited' })
+    expect(store.lanes.tutor.busy).toBe(true)
+    expect(store.lanes.tutor.messages[0]?.status).toBe('streaming')
+    expect(store.lanes.tutor.error).toBe('')
+  })
   it('binds late vocabulary answers to the draft version captured when sending', async () => {
     const store = useCodexStore()
     await store.connect()

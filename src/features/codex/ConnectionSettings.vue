@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useCodexStore } from './store'
+import { useChatStore } from '../chat/store'
 defineProps<{ tutorOnly?: boolean }>()
-const codex = useCodexStore()
+const codex = useChatStore()
 const windows = computed(() => {
   const limit = codex.limits?.rateLimits
   return [limit?.primary, limit?.secondary].filter((item) => item != null)

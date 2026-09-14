@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import StudyText from '../vocabulary/StudyText.vue'
-import { useCodexStore } from './store'
+import { useChatStore } from '../chat/store'
 import { useSettingsStore } from '../settings/store'
-import type { Message } from './store'
+import type { Message } from '../chat/store'
 const props = defineProps<{ messages: Message[]; busy: boolean; pane: 'main' | 'tutor' }>()
-const codex = useCodexStore()
+const codex = useChatStore()
 const settings = useSettingsStore()
 const conversation = computed(() => codex.history.find((c) => c.id === codex.lanes[props.pane].id))
 const root = ref<HTMLElement>()

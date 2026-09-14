@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { captureSelection, captureText, type SourceOrigin } from '../../shared/selection'
 import { useVocabularyStore } from './store'
-import { useCodexStore } from '../codex/store'
+import { useChatStore } from '../chat/store'
 import type { VocabularySource } from './types'
 const props = defineProps<{
   text: string
@@ -16,7 +16,7 @@ const emit = defineEmits<{
   selection: [source: VocabularySource | null]
 }>()
 const vocabulary = useVocabularyStore()
-const codex = useCodexStore()
+const codex = useChatStore()
 const body = ref<HTMLElement>()
 const selected = ref<VocabularySource | null>(null)
 const error = ref('')
@@ -153,14 +153,14 @@ function useAnswer(field: 'meaning' | 'note') {
       <template v-if="selected">
         <button
           class="text-button"
-          :disabled="!codex.ready || codex.lanes.tutor.busy"
+          :disabled="!codex.isReady('tutor') || codex.lanes.tutor.busy"
           @click="ask('explain')"
         >
           解释
         </button>
         <button
           class="text-button"
-          :disabled="!codex.ready || codex.lanes.tutor.busy"
+          :disabled="!codex.isReady('tutor') || codex.lanes.tutor.busy"
           @click="ask('translate')"
         >
           翻译

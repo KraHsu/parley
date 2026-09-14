@@ -2,6 +2,8 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "get_runtime_info",
+            "backend_profiles",
+            "backend_save_profile",
             "get_launch_options",
             "codex_connect",
             "codex_disconnect",

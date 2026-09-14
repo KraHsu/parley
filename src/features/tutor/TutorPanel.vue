@@ -2,8 +2,8 @@
 import { computed, ref, toRef } from 'vue'
 import AppIcon from '../../shared/AppIcon.vue'
 import MessageList from '../codex/MessageList.vue'
-import { useCodexStore } from '../codex/store'
-const codex = useCodexStore()
+import { useChatStore } from '../chat/store'
+const codex = useChatStore()
 const lane = codex.lanes.tutor
 import type { IconName } from '../../shared/AppIcon.vue'
 
@@ -49,7 +49,7 @@ function fillDraft(text: string) {
   input.value?.focus()
 }
 async function send() {
-  if (!draft.value.trim() || lane.busy || !codex.ready) return
+  if (!draft.value.trim() || lane.busy || !codex.isReady('tutor')) return
   const text = draft.value
   await codex.send('tutor', text, activeMode.value)
 }
@@ -127,7 +127,9 @@ function onKeydown(event: KeyboardEvent) {
           <span>用母语问，也没关系</span
           ><button
             class="send-button"
-            :disabled="!lane.busy && (!codex.ready || !draft.trim() || !codex.tutorModel)"
+            :disabled="
+              !lane.busy && (!codex.isReady('tutor') || !draft.trim() || !codex.tutorModel)
+            "
             :aria-label="lane.busy ? '停止辅导回复' : '发送辅导问题'"
             @click="lane.busy ? codex.stop('tutor') : send()"
           >
@@ -137,7 +139,7 @@ function onKeydown(event: KeyboardEvent) {
       </div>
       <p v-if="lane.error" class="inline-error" role="alert">{{ lane.error }}</p>
       <p id="tutor-status" class="composer-caption">
-        {{ codex.ready ? codex.tutorModel : '辅导模型尚未连接' }}
+        {{ codex.isReady('tutor') ? codex.tutorModel : '辅导模型尚未连接' }}
       </p>
     </div>
   </section>

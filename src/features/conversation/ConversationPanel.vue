@@ -3,8 +3,8 @@ import { ref, toRef } from 'vue'
 import { useSettingsStore } from '../settings/store'
 import AppIcon from '../../shared/AppIcon.vue'
 import MessageList from '../codex/MessageList.vue'
-import { useCodexStore } from '../codex/store'
-const codex = useCodexStore()
+import { useChatStore } from '../chat/store'
+const codex = useChatStore()
 const lane = codex.lanes.main
 import type { IconName } from '../../shared/AppIcon.vue'
 
@@ -73,7 +73,7 @@ function chooseTopic(index: number) {
   input.value?.focus()
 }
 async function send() {
-  if (!draft.value.trim() || lane.busy || !codex.ready) return
+  if (!draft.value.trim() || lane.busy || !codex.isReady('main')) return
   const text = draft.value
   await codex.send('main', text)
 }
@@ -160,7 +160,7 @@ function onKeydown(event: KeyboardEvent) {
           >
           <button
             class="send-button"
-            :disabled="!lane.busy && (!codex.ready || !draft.trim() || !codex.mainModel)"
+            :disabled="!lane.busy && (!codex.isReady('main') || !draft.trim() || !codex.mainModel)"
             :aria-label="lane.busy ? '停止回复' : '发送消息'"
             @click="lane.busy ? codex.stop('main') : send()"
           >
@@ -170,7 +170,7 @@ function onKeydown(event: KeyboardEvent) {
       </div>
       <p v-if="lane.error" class="inline-error" role="alert">{{ lane.error }}</p>
       <p id="conversation-status" class="composer-caption">
-        <span class="tiny-dot" />{{ codex.ready ? codex.mainModel : '尚未连接 Codex'
+        <span class="tiny-dot" />{{ codex.isReady('main') ? codex.mainModel : '尚未连接 Codex'
         }}<button @click="$emit('connect')">
           连接设置<AppIcon name="arrow-right" :size="12" />
         </button>

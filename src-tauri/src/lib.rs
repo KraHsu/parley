@@ -1,3 +1,4 @@
+mod backends;
 mod codex;
 mod exchange;
 mod launcher;
@@ -33,6 +34,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_runtime_info,
+            backends::backend_profiles,
+            backends::backend_save_profile,
             launcher::get_launch_options,
             codex::codex_connect,
             codex::codex_disconnect,
