@@ -14,7 +14,10 @@ pub const MAX_CONTEXT: usize = 96 * 1024;
 pub fn supported(kind: BackendKind) -> bool {
     matches!(
         kind,
-        BackendKind::OpenaiResponses | BackendKind::OpenaiCompatible
+        BackendKind::OpenaiResponses
+            | BackendKind::OpenaiCompatible
+            | BackendKind::AnthropicMessages
+            | BackendKind::GeminiInteractions
     )
 }
 
@@ -65,74 +68,186 @@ pub fn request_body(
     }
     let clipped = selected.len() != history.len();
     selected.reverse();
-    let responses = turn.profile.config.kind == BackendKind::OpenaiResponses;
+    let kind = turn.profile.config.kind;
     let mut input = Vec::new();
-    if !responses {
+    if kind == BackendKind::OpenaiCompatible {
         input.push(json!({"role":"system","content":system}));
     }
     for (user, assistant, output) in selected {
-        input.push(json!({"role":"user","content":user}));
-        if responses {
-            if let Some(Value::Array(items)) = output {
-                input.extend(items.iter().cloned());
-            } else {
-                input.push(json!({"role":"assistant","content":assistant}));
-            }
-        } else {
-            let mut message = json!({"role":"assistant","content":assistant});
-            if let Some(reasoning) = output
+        if kind == BackendKind::GeminiInteractions {
+            input.push(json!({"type":"user_input","content":[{"type":"text","text":user}]}));
+            let steps = output
                 .as_ref()
-                .and_then(|o| o.get("reasoning_content"))
-                .and_then(Value::as_str)
-            {
-                message["reasoning_content"] = json!(reasoning);
+                .and_then(Value::as_array)
+                .ok_or("Gemini 续聊状态缺失，请新建对话。")?;
+            input.extend(steps.iter().cloned());
+        } else {
+            input.push(json!({"role":"user","content":user}));
+            match kind {
+                BackendKind::OpenaiResponses => {
+                    if let Some(Value::Array(items)) = output {
+                        input.extend(items.iter().cloned());
+                    } else {
+                        input.push(json!({"role":"assistant","content":assistant}));
+                    }
+                }
+                BackendKind::AnthropicMessages => {
+                    let content = output
+                        .as_ref()
+                        .filter(|v| v.is_array())
+                        .cloned()
+                        .unwrap_or_else(|| json!([{"type":"text","text":assistant}]));
+                    input.push(json!({"role":"assistant","content":content}));
+                }
+                _ => {
+                    let mut message = json!({"role":"assistant","content":assistant});
+                    if let Some(reasoning) = output
+                        .as_ref()
+                        .and_then(|o| o.get("reasoning_content"))
+                        .and_then(Value::as_str)
+                    {
+                        message["reasoning_content"] = json!(reasoning);
+                    }
+                    input.push(message);
+                }
             }
-            input.push(message);
         }
     }
-    input.push(json!({"role":"user","content":turn.input}));
-    let body = if responses {
-        json!({"model":turn.model,"instructions":system,"input":input,"stream":true,"store":false,"include":["reasoning.encrypted_content"],"max_output_tokens":4096})
+    if kind == BackendKind::GeminiInteractions {
+        input.push(json!({"type":"user_input","content":[{"type":"text","text":turn.input}]}));
     } else {
-        let mut body = json!({"model":turn.model,"messages":input,"stream":true,"stream_options":{"include_usage":true}});
-        body[if turn.profile.config.provider == Provider::Openai {
-            "max_completion_tokens"
-        } else {
-            "max_tokens"
-        }] = json!(4096);
-        body
+        input.push(json!({"role":"user","content":turn.input}));
+    }
+    let body = match kind {
+        BackendKind::OpenaiResponses => {
+            json!({"model":turn.model,"instructions":system,"input":input,"stream":true,"store":false,"include":["reasoning.encrypted_content"],"max_output_tokens":4096})
+        }
+        BackendKind::AnthropicMessages => {
+            json!({"model":turn.model,"system":system,"messages":input,"stream":true,"max_tokens":4096})
+        }
+        BackendKind::GeminiInteractions => {
+            json!({"model":turn.model,"system_instruction":system,"input":input,"stream":true,"store":false,"generation_config":{"max_output_tokens":4096}})
+        }
+        BackendKind::OpenaiCompatible => {
+            let mut body = json!({"model":turn.model,"messages":input,"stream":true,"stream_options":{"include_usage":true}});
+            body[if turn.profile.config.provider == Provider::Openai {
+                "max_completion_tokens"
+            } else {
+                "max_tokens"
+            }] = json!(4096);
+            body
+        }
+        _ => return Err("此后端不是直接 API 协议。".into()),
     };
     Ok((body, clipped))
 }
 
+fn authenticated(
+    request: reqwest::RequestBuilder,
+    kind: BackendKind,
+    credential: &Credential,
+) -> reqwest::RequestBuilder {
+    match kind {
+        BackendKind::AnthropicMessages => request
+            .header("x-api-key", credential.key.as_str())
+            .header("anthropic-version", "2023-06-01"),
+        BackendKind::GeminiInteractions => request
+            .header("x-goog-api-key", credential.key.as_str())
+            .header("Api-Revision", "2026-05-20"),
+        _ => request.bearer_auth(credential.key.as_str()),
+    }
+}
 pub async fn models(
     profile: &BackendProfile,
     credential: &Credential,
 ) -> Result<Vec<String>, String> {
-    let response = client()?
-        .get(format!("{}/models", profile.config.endpoint))
-        .bearer_auth(credential.key.as_str())
-        .send()
-        .await
-        .map_err(network_error)?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(status_error(status.as_u16()));
-    }
-    let body = bounded_body(response, 2 * 1024 * 1024).await?;
-    let json: Value = serde_json::from_slice(&body).map_err(|_| "模型列表不是有效 JSON。")?;
-    let mut models: Vec<_> = json["data"]
+    let client = client()?;
+    let kind = profile.config.kind;
+    let mut models = Vec::new();
+    let mut cursor = None::<String>;
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..20 {
+        let mut url = url::Url::parse(&format!("{}/models", profile.config.endpoint))
+            .map_err(|_| "模型服务地址无效。")?;
+        if kind == BackendKind::AnthropicMessages {
+            url.query_pairs_mut().append_pair("limit", "1000");
+        }
+        if kind == BackendKind::GeminiInteractions {
+            url.query_pairs_mut().append_pair("pageSize", "1000");
+        }
+        if let Some(cursor) = &cursor {
+            url.query_pairs_mut().append_pair(
+                if kind == BackendKind::GeminiInteractions {
+                    "pageToken"
+                } else {
+                    "after_id"
+                },
+                cursor,
+            );
+        }
+        let request = client.get(url);
+        let response = authenticated(request, kind, credential)
+            .send()
+            .await
+            .map_err(network_error)?;
+        if !response.status().is_success() {
+            return Err(status_error(response.status().as_u16()));
+        }
+        let body = bounded_body(response, 2 * 1024 * 1024).await?;
+        let json: Value = serde_json::from_slice(&body).map_err(|_| "模型列表不是有效 JSON。")?;
+        let rows = json[if kind == BackendKind::GeminiInteractions {
+            "models"
+        } else {
+            "data"
+        }]
         .as_array()
-        .ok_or("服务未返回兼容的模型列表，可手动填写模型 ID。")?
-        .iter()
-        .filter_map(|m| m["id"].as_str())
-        .filter(|id| !id.is_empty() && id.len() <= 200)
-        .map(str::to_owned)
-        .collect();
-    models.sort();
-    models.dedup();
-    models.truncate(2000);
-    Ok(models)
+        .ok_or("服务未返回兼容的模型列表，可手动填写模型 ID。")?;
+        models.extend(
+            rows.iter()
+                .filter_map(|m| {
+                    m[if kind == BackendKind::GeminiInteractions {
+                        "name"
+                    } else {
+                        "id"
+                    }]
+                    .as_str()
+                })
+                .map(|id| {
+                    if kind == BackendKind::GeminiInteractions {
+                        id.strip_prefix("models/").unwrap_or(id)
+                    } else {
+                        id
+                    }
+                })
+                .filter(|id| !id.is_empty() && id.len() <= 200)
+                .map(str::to_owned),
+        );
+        cursor = if kind == BackendKind::GeminiInteractions {
+            json["nextPageToken"]
+                .as_str()
+                .filter(|c| !c.is_empty())
+                .map(str::to_owned)
+        } else if kind == BackendKind::AnthropicMessages && json["has_more"] == true {
+            Some(
+                json["last_id"]
+                    .as_str()
+                    .ok_or("模型列表分页缺少游标。")?
+                    .to_owned(),
+            )
+        } else {
+            None
+        };
+        let Some(token) = &cursor else {
+            models.sort();
+            models.dedup();
+            models.truncate(2000);
+            return Ok(models);
+        };
+        if token.len() > 4096 || !seen.insert(token.clone()) {
+            return Err("模型列表分页无效，可手动填写模型 ID。".into());
+        }
+    }
+    Err("模型列表超出分页限制，可手动填写模型 ID。".into())
 }
 
 async fn bounded_body(response: reqwest::Response, max: usize) -> Result<Vec<u8>, String> {
@@ -173,14 +288,20 @@ pub struct Output {
     pub usage: Option<Value>,
     pub continuation: Option<Value>,
     pub complete: bool,
-    finish: Option<String>,
+    pub(super) finish: Option<String>,
+    pub(super) blocks: Vec<Value>,
+    pub(super) open_block: Option<usize>,
+    pub(super) started: bool,
     reasoning: String,
 }
 
 impl Output {
     pub fn accept(&mut self, kind: BackendKind, data: &str) -> Result<(), String> {
+        if self.complete {
+            return Ok(());
+        }
         if data == "[DONE]" {
-            if self.finish.as_deref() != Some("stop") {
+            if kind != BackendKind::OpenaiCompatible || self.finish.as_deref() != Some("stop") {
                 return Err("回复未正常完成，已保留部分内容。".into());
             }
             self.complete = true;
@@ -194,6 +315,12 @@ impl Output {
             return Err(
                 "服务在生成过程中返回错误，已保留部分回复；请检查额度和服务状态后重试。".into(),
             );
+        }
+        if kind == BackendKind::AnthropicMessages {
+            return self.anthropic(&value);
+        }
+        if kind == BackendKind::GeminiInteractions {
+            return self.gemini(&value);
         }
         if kind == BackendKind::OpenaiResponses {
             match value["type"].as_str() {
@@ -290,25 +417,33 @@ impl Output {
     }
 }
 
-pub async fn generate(
+pub async fn generate<F, Fut>(
     turn: &ApiTurn,
     credential: &Credential,
     body: Value,
     output: &mut Output,
-    mut changed: impl FnMut(&Output) -> Result<(), String>,
-) -> Result<(), String> {
-    let route = if turn.profile.config.kind == BackendKind::OpenaiResponses {
-        "responses"
-    } else {
-        "chat/completions"
+    mut changed: F,
+) -> Result<(), String>
+where
+    F: FnMut(&Output) -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    let route = match turn.profile.config.kind {
+        BackendKind::OpenaiResponses => "responses",
+        BackendKind::OpenaiCompatible => "chat/completions",
+        BackendKind::AnthropicMessages => "messages",
+        BackendKind::GeminiInteractions => "interactions?alt=sse",
+        _ => return Err("此后端不是直接 API 协议。".into()),
     };
-    let response = client()?
-        .post(format!("{}/{route}", turn.profile.config.endpoint))
-        .bearer_auth(credential.key.as_str())
-        .json(&body)
-        .send()
-        .await
-        .map_err(network_error)?;
+    let response = authenticated(
+        client()?.post(format!("{}/{route}", turn.profile.config.endpoint)),
+        turn.profile.config.kind,
+        credential,
+    )
+    .json(&body)
+    .send()
+    .await
+    .map_err(network_error)?;
     if !response.status().is_success() {
         return Err(status_error(response.status().as_u16()));
     }
@@ -323,7 +458,25 @@ pub async fn generate(
     let mut stream = response.bytes_stream();
     let mut decoder = Decoder::default();
     let mut size = 0;
-    while let Some(chunk) = stream.next().await {
+    let mut dirty = false;
+    let mut next_flush = tokio::time::Instant::now();
+    loop {
+        let chunk = tokio::select! {
+            biased;
+            _ = tokio::time::sleep_until(next_flush), if dirty => {
+                changed(output).await?;
+                dirty = false;
+                next_flush = tokio::time::Instant::now() + Duration::from_millis(50);
+                continue;
+            }
+            chunk = stream.next() => chunk,
+        };
+        let Some(chunk) = chunk else {
+            if dirty {
+                changed(output).await?;
+            }
+            break;
+        };
         let chunk = chunk.map_err(network_error)?;
         size += chunk.len();
         if size > MAX_RESPONSE {
@@ -336,10 +489,9 @@ pub async fn generate(
                 break;
             }
         }
-        if output.text.len() != before || output.complete {
-            changed(output)?;
-        }
+        dirty |= output.text.len() != before;
         if output.complete {
+            changed(output).await?;
             return Ok(());
         }
     }
@@ -471,7 +623,7 @@ mod tests {
             Duration::from_secs(5),
             generate(&turn, &key, body, &mut out, |out| {
                 updates.push(out.text.clone());
-                Ok(())
+                std::future::ready(Ok(()))
             }),
         )
         .await

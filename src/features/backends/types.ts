@@ -46,7 +46,10 @@ export interface TurnEvent {
   notice: string | null
 }
 export const apiSupported = (kind: BackendKind) =>
-  kind === 'openai_responses' || kind === 'openai_compatible'
+  kind === 'openai_responses' ||
+  kind === 'openai_compatible' ||
+  kind === 'anthropic_messages' ||
+  kind === 'gemini_interactions'
 
 export const presets: { label: string; config: ProfileConfig; available: boolean }[] = [
   {
@@ -122,7 +125,7 @@ export const presets: { label: string; config: ProfileConfig; available: boolean
     available: true,
   },
   {
-    label: 'Claude API（开发中）',
+    label: 'Claude API',
     config: {
       name: 'Claude API',
       kind: 'anthropic_messages',
@@ -131,10 +134,10 @@ export const presets: { label: string; config: ProfileConfig; available: boolean
       binaryPath: '',
       enabled: true,
     },
-    available: false,
+    available: true,
   },
   {
-    label: 'Gemini API（开发中）',
+    label: 'Gemini API',
     config: {
       name: 'Gemini API',
       kind: 'gemini_interactions',
@@ -143,7 +146,7 @@ export const presets: { label: string; config: ProfileConfig; available: boolean
       binaryPath: '',
       enabled: true,
     },
-    available: false,
+    available: true,
   },
   {
     label: 'Claude Code（开发中）',

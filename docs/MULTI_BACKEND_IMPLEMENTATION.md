@@ -72,3 +72,19 @@ Anthropic Messages、Gemini Interactions、Claude Code GUI/原生终端适配、
 - Codex `0.154.0` 的真实初始化、现有 ChatGPT 登录及模型列表只读测试通过，未发起生成。格式检查、TypeScript、Clippy（禁止警告）和 Linux Tauri 调试构建通过；本机已安装程序与正式学习数据未改动。
 
 Diesel 业务存储迁移已完成；P1 的统一后端运行时、流式写入批处理、工作区 store 完整拆分，以及后续原生协议、Claude Code、终端同步、跨后端学习来源与发布验收仍需继续。本节点仍非完整多后端版本交付。
+
+## 2026-09-14：Claude / Gemini 原生 API 与异步流式保存
+
+- 设置页启用 Claude Messages 与 Gemini Interactions 配置。两者分别使用原生认证头、请求体、模型列表分页和 SSE 状态机；模型由服务端发现或用户填写，没有硬编码默认型号。
+- Claude 按消息与内容块顺序组合文本、thinking / redacted_thinking、签名和累计用量；只有正常结束事件才标记完成。下一轮回放保存在本机的助手内容块。[Messages 流式契约](https://platform.claude.com/docs/en/build-with-claude/streaming)、[模型分页](https://platform.claude.com/docs/en/api/models/list)。
+- Gemini 按当前 Interactions `event_type` 契约组装 `thought` 与 `model_output` steps，保存签名和摘要。请求固定 `Api-Revision: 2026-05-20`，使用 `store=false`，下一轮回放本地 steps；完成事件没有完整 steps，因此不以最后一个事件替代此前累积内容。缺失续聊状态时要求新建会话。[入门请求格式](https://ai.google.dev/gemini-api/docs/get-started)、[流式事件与本地组合](https://ai.google.dev/gemini-api/docs/streaming)、[模型分页](https://ai.google.dev/api/models)。
+- 两种原生协议均拒绝不支持的工具/非文本内容，流内错误、输出限制或缺失完成确认保留部分正文并报告失败。未知元数据可以忽略，孤立 delta 与不完整内容块不能伪装为成功。协议思考内容用于续聊，界面只投影回答正文。
+- API 运行时在读取数据库和凭据前登记活动请求，准备阶段也可取消。会话准备、流式保存和最终状态通过阻塞任务访问 Diesel；正文更新约每 50 ms 合并一次，完成立即保存。事件仍在数据库接受对应序号后发送，旧写入不能覆盖最终状态。
+- 回环 HTTP 测试覆盖两种原生服务各两轮请求、独立认证头、分片 UTF-8、签名续聊、临时磁盘数据库持久化、模型列表分页/游标编码/去重；另验证按配置取消不影响另一个活动面板，以及连续 delta 合并后正文和完成事件不丢失。
+- Rust **70 项**普通测试、前端 **40 项**测试通过；4 项默认忽略的测试本轮未重跑。格式检查、TypeScript、Clippy（禁止警告）、前端生产构建和 Linux Tauri 调试构建通过。
+
+### 当前剩余范围
+
+P2 的三种原生 API 已有实现及本地协议测试，真实服务调用和系统凭据库桌面交互仍未验证。模型发现不保证列出的每个模型均支持本项目的文本协议，需用户选择适用模型；兼容厂商的参数适配与逐厂商验证仍按 P3 推进。
+
+P1 的 Codex 多配置运行时与完整工作区 store 拆分、P4/P5 的 Claude Code GUI 与原生终端伴随、P6 的用量展示/跨后端学习来源/备份 v2，以及 P7 桌面验收与发布继续待办。本节点不代表 v0.4.0 已完成。
