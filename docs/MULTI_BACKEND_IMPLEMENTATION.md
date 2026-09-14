@@ -107,3 +107,16 @@ P1 的 Codex 多配置运行时与完整工作区 store 拆分、P4/P5 的 Claud
 本轮 Rust **77 项**普通测试、前端 **40 项**测试通过；5 项默认忽略的测试中，单独执行的 Claude CLI 回环实测通过。格式、TypeScript、Clippy（禁止警告）、前端生产构建与 Linux Tauri 调试构建通过。并发子进程测试中遇到的临时脚本 `ETXTBSY` 仅在原有 launcher 测试中做有界等待，不改变原生 Codex 启动行为。
 
 P4 已有可用实现及本机 CLI/回环协议证据，真实 Anthropic 调用、系统密钥库交互、GUI 操作及其他平台进程回收仍待验收。P5 的 Claude 原生 TUI 启动和自动上下文同步尚未实现；现有原生 Codex 启动方式没有扩展。P1 剩余运行时拆分、P3 厂商适配、P6 来源及备份 v2、P7 完整发布仍按原计划推进。
+
+## 2026-09-14：原生 Claude 终端伴随与事件同步
+
+- `parley-cli` 新增 `--backend codex|claude-code` 与 `--claude PATH`；默认 Codex 及原有参数边界保留。Claude 路径可通过 Diesel 只读查询已有配置；多个不同的启用路径不会自动猜测。原生 CLI 继承用户环境及终端，不借用 GUI 的 API 凭据。
+- GUI 启动带容量与超时限制的回环 HTTP 接收器，创建每次启动专用的临时 hooks 插件。启动器通过私有临时就绪文件获得插件路径，用 `--plugin-dir` 附加到原生 CLI；保留用户 `--settings` 和已有插件参数。临时插件随 GUI 生命周期清理，不更改全局配置。
+- 接收器校验启动令牌、路径、载荷与连接数，拒绝浏览器来源/分块载荷，忽略子代理文本和 API 错误文本。只使用 `SessionStart`、`UserPromptSubmit`、`Stop` 等事件提供的内容，不读取 transcript 或 ANSI 屏幕。成功响应始终为 `{}`，不提供控制决定或额外模型上下文。[官方 HTTP hooks 与 Stop 字段](https://code.claude.com/docs/en/hooks)、[每次运行的插件机制](https://code.claude.com/docs/en/plugins-reference)。
+- GUI 可在未连接 Codex 时同步 Claude 文本；只在需要 Codex 源或 Codex 助手时连接 Codex。可选择来源、查看最近消息、冻结选区和向所选助手解释/翻译。源会话使用 `claude-code:` 命名空间，词句来源显示 Claude Code；通用来源字段与备份 v2 继续在 P6 实施。
+- 本机 `Claude Code 2.1.269` 的实际 hook 投递测试通过：临时回环 API 产生输入/回答，Rust 接收器得到两条正文；用户另外提供的 Stop command hook 也执行成功。此测试经 CLI headless 触发官方事件，不能替代完整交互式 TUI 验收。启动器直通本机 CLI 的 `--version` 检查通过。
+- 新增测试覆盖后端参数、原生 settings/plugin 参数保留、只读路径发现的歧义判断、事件认证与大小限制、会话命名空间、最近六轮普通对话、重复 Stop、子代理和错误内容过滤；前端上下文预算扩展为十二条消息，仍有字符与 IPC 大小限制。
+
+本轮 Rust **81 项**普通测试、前端 **41 项**测试通过；6 项默认忽略的测试中，单独执行的 Claude hooks 实测通过。格式、TypeScript、Clippy（禁止警告）、前端生产构建及 Linux Tauri 调试构建通过。已安装应用和正式学习数据库未改动。
+
+当前只保留本次 GUI 生命周期内收到的终端内容；收藏后的原句快照继续由数据库持久化。启动前历史、关闭窗口后重新附着、真实服务及完整桌面选词流程尚未验收。GUI 关闭后停止接收，原生 CLI 继续运行，可能显示非阻塞 hook 连接提示；重新同步需要重开终端伴随模式。P1、P3、P6 和完整发布清单仍未完成，本节点不代表 v0.4.0 发布就绪。

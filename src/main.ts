@@ -14,17 +14,20 @@ async function start() {
         codexPath: string | null
         terminalCwd: string | null
         terminalStartedAt: number
+        terminalBackend: 'codex' | 'claude-code'
       }>('get_launch_options')
     : {
         tutorOnly: new URLSearchParams(location.search).get('mode') === 'tutor',
         codexPath: null,
         terminalCwd: null,
         terminalStartedAt: 0,
+        terminalBackend: 'codex' as const,
       }
   createApp(options.tutorOnly ? TutorApp : App, {
     initialCodexPath: options.codexPath,
     terminalCwd: options.terminalCwd,
     terminalStartedAt: options.terminalStartedAt,
+    terminalBackend: options.terminalBackend,
   })
     .use(createPinia())
     .mount('#app')

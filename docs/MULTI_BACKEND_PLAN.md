@@ -142,7 +142,7 @@ API Key 保存到系统凭据库：Linux Secret Service、macOS Keychain、Windo
 
 ### 5.3 原生终端伴随
 
-计划增加以下语法，现有命令继续兼容：
+开发分支已实现以下语法，现有命令继续兼容；交互式 TUI 与完整桌面联动仍待验收：
 
 ```bash
 parley-cli                                  # 保持默认 Codex
@@ -154,7 +154,7 @@ parley-cli --backend claude-code --claude /path/to/claude
 
 GUI 助手使用设置中独立选择的后端。官方 CLI 直接占用当前终端，参数边界、退出码和信号保持一致；不重画一个 Codex/Claude Code TUI，不依赖复制粘贴。
 
-Codex 保留当前只读历史同步。Claude Code 优先验证每次启动注入的局部 hooks：通过受限本地 IPC 将会话标识和已完成消息传给 GUI，利用官方 session/prompt/stop 事件；不从 ANSI 屏幕文字反推消息，也不全局改写用户 hooks。[官方 hooks 文档](https://code.claude.com/docs/en/hooks)
+Codex 保留当前只读历史同步。Claude Code 使用每次启动生成的临时 hooks 插件，通过 `--plugin-dir` 添加到该次原生进程；用户的 `--settings` 和其他插件参数原样保留。GUI 通过带启动令牌的回环 HTTP 接收 session/prompt/stop 事件，使用 Stop 的 `last_assistant_message` 获取回答；不读取 ANSI 屏幕或 transcript 文件，也不全局改写用户 hooks。[官方 hooks 文档](https://code.claude.com/docs/en/hooks)
 
 hook 接收器限制载荷大小、验证本次启动令牌与来源，成功后静默退出，不向原生会话注入额外指令。用户配置与管理策略需要合并和检测。hook 不可用时原生 CLI 仍可正常工作，GUI 明确显示自动同步不可用，不伪装为已获取上下文。
 

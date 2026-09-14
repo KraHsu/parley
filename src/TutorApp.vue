@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useBackendStore } from './features/backends/store'
 import TutorPanel from './features/tutor/TutorPanel.vue'
 import TerminalContext from './features/terminal/TerminalContext.vue'
 import VocabularyPanel from './features/vocabulary/VocabularyPanel.vue'
@@ -15,8 +16,10 @@ const props = defineProps<{
   initialCodexPath?: string | null
   terminalCwd?: string | null
   terminalStartedAt?: number
+  terminalBackend?: 'codex' | 'claude-code'
 }>()
 const settings = useSettingsStore()
+const backends = useBackendStore()
 const view = ref('tutor')
 const vocabulary = useVocabularyStore()
 watch(
@@ -36,9 +39,17 @@ const { codex, closeError, attemptClose } = useWorkspaceWindow(
   () => dialog.value?.close(),
   async () => {
     if (props.initialCodexPath) codex.codexPath = props.initialCodexPath
-    if (isDesktop() && codex.codexPath) await codex.connect()
-    else dialog.value?.showModal()
+    const needsCodex =
+      codex.lanes.tutor.backend.profileId === 'codex-default' ||
+      (!!props.terminalCwd && props.terminalBackend !== 'claude-code')
+    if (needsCodex && isDesktop() && codex.codexPath) await codex.connect()
+    else if (!codex.isReady('tutor')) dialog.value?.showModal()
   },
+)
+const assistantLabel = computed(() =>
+  codex.lanes.tutor.backend.profileId === 'codex-default'
+    ? codex.label
+    : `${backends.profiles.find((p) => p.id === codex.lanes.tutor.backend.profileId)?.config.name ?? '语言助手'} · ${codex.isReady('tutor') ? '可用' : '待配置'}`,
 )
 </script>
 <template>
@@ -46,10 +57,12 @@ const { codex, closeError, attemptClose } = useWorkspaceWindow(
     <header class="tutor-app-header">
       <div>
         <strong>parley<span>.</span></strong>
-        <p>Codex 在终端，语言答疑在这里。</p>
+        <p>
+          {{ terminalBackend === 'claude-code' ? 'Claude Code' : 'Codex' }} 在终端，语言答疑在这里。
+        </p>
       </div>
       <button class="secondary-button" @click="dialog?.showModal()">
-        设置 · {{ codex.label }}
+        设置 · {{ assistantLabel }}
       </button>
     </header>
     <div v-if="codex.loading || codex.storageError" class="storage-banner" role="status">
@@ -94,6 +107,7 @@ const { codex, closeError, attemptClose } = useWorkspaceWindow(
       v-if="terminalCwd"
       v-show="view === 'tutor'"
       :started-at="terminalStartedAt ?? 0"
+      :backend="terminalBackend"
     />
     <main class="tutor-app-body">
       <TutorPanel v-show="view === 'tutor'" /><VocabularyPanel
@@ -128,7 +142,8 @@ const { codex, closeError, attemptClose } = useWorkspaceWindow(
             :disabled="!codex.initialized || codex.closing"
           />
           <p class="settings-help">
-            这些设置用于语法助手。终端对话由 Codex 管理；关联后，提问会自动附带最近对话和选中片段。
+            这些设置用于语法助手。终端对话由官方 CLI
+            管理；关联后，提问会自动附带最近对话和选中片段。
           </p>
         </section>
         <ConnectionSettings tutor-only />

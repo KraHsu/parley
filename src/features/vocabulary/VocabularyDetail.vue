@@ -34,7 +34,9 @@ watch(
       >
         <span class="overline">{{
           source.sourceKind === 'terminal'
-            ? 'Codex 终端'
+            ? source.threadId?.startsWith('claude-code:')
+              ? 'Claude Code 终端'
+              : 'Codex 终端'
             : source.sourceKind === 'import'
               ? '导入材料'
               : '对话原句'

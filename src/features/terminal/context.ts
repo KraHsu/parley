@@ -14,6 +14,8 @@ export interface TerminalMessage {
 export interface TerminalSnapshot {
   threads: TerminalThread[]
   messages: TerminalMessage[]
+  connected?: boolean
+  notice?: string
 }
 export function autoSelectThread(threads: TerminalThread[], startedAt: number): string {
   if (!startedAt) return ''
@@ -23,7 +25,7 @@ export function autoSelectThread(threads: TerminalThread[], startedAt: number): 
 }
 export function studyContext(messages: TerminalMessage[], selection = ''): string {
   const recent = messages
-    .slice(-6)
+    .slice(-12)
     .map((message) => `${message.role}: ${message.text}`)
     .join('\n\n')
   const text = selection ? `${recent}\n\nSelected passage for study: ${selection}` : recent

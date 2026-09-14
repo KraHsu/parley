@@ -9,6 +9,17 @@ describe('terminal context', () => {
     expect(autoSelectThread([current], 0)).toBe('')
     expect(autoSelectThread([current, { ...current, id: 'other' }], 100)).toBe('')
   })
+  it('keeps six recent conversational rounds', () => {
+    const messages = Array.from({ length: 16 }, (_, i) => ({
+      id: String(i),
+      role: i % 2 ? ('assistant' as const) : ('user' as const),
+      text: `message-${i}`,
+    }))
+    const text = studyContext(messages)
+    expect(text).not.toContain('message-3\n')
+    expect(text).toContain('user: message-4')
+    expect(text).toContain('assistant: message-15')
+  })
   it('includes the selected passage and recent dialog within the IPC byte limit', () => {
     const text = studyContext([{ id: '1', role: 'assistant', text: '😀'.repeat(8000) }], 'a phrase')
     expect(text).toContain('Selected passage for study: a phrase')

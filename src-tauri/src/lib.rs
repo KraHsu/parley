@@ -4,6 +4,7 @@ mod exchange;
 mod launcher;
 mod review;
 mod storage;
+mod terminal;
 mod vocabulary;
 pub use launcher::run_cli;
 use tauri::Manager;
@@ -31,6 +32,20 @@ pub fn run() {
                 .map(|dir| dir.join("parley.sqlite3"))
                 .map_err(|e| e.to_string());
             app.manage(storage::StorageState::new(path));
+            let terminal = app
+                .state::<launcher::LaunchOptions>()
+                .terminal_ready
+                .as_ref()
+                .map(|path| terminal::TerminalState::start(path))
+                .transpose();
+            match terminal {
+                Ok(value) => {
+                    app.manage(value.unwrap_or_default());
+                }
+                Err(_) => {
+                    app.manage(terminal::TerminalState::default());
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -45,6 +60,7 @@ pub fn run() {
             backends::manager::backend_stop,
             backends::manager::backend_disconnect,
             launcher::get_launch_options,
+            terminal::claude_terminal_context,
             codex::codex_connect,
             codex::codex_disconnect,
             codex::codex_status,
