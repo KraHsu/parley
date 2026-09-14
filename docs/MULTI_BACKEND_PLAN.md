@@ -122,7 +122,7 @@ API 默认由本地保存并组织多轮历史。服务支持时显式关闭响�
 
 ### 5.1 API 与凭据
 
-使用 Rust HTTP 客户端与独立的 SSE 解析层；所有模型请求留在 Rust，WebView 不直接访问模型域名。兼容适配器共享协议处理，但厂商差异通过明确的参数映射、能力声明及 fixture 表达，不能不断添加无依据的字段重试。
+使用 Rust HTTP 客户端与独立的 SSE 解析层；所有模型请求留在 Rust，WebView 不直接访问模型域名。兼容适配器共享协议处理，厂商参数映射和 fixture 已按 [兼容记录](BACKEND_COMPATIBILITY.md) 落地；真实服务验收单列。不能不断添加无依据的字段重试。
 
 API Key 保存到系统凭据库：Linux Secret Service、macOS Keychain、Windows Credential Manager。SQLite 仅保存引用。密钥输入提交后清空，IPC 只返回“已配置”等状态；不回显旧密钥，不进入日志、错误正文、词句备份或普通设置导出。凭据库不可用或锁定时提供仅本次会话使用，不回退到明文文件。
 

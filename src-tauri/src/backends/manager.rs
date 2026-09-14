@@ -527,6 +527,27 @@ mod tests {
         kind: BackendKind,
         pane: &str,
     ) -> BackendProfile {
+        profile_for_provider(
+            state,
+            backend,
+            endpoint,
+            kind,
+            match kind {
+                BackendKind::AnthropicMessages => Provider::Anthropic,
+                BackendKind::GeminiInteractions => Provider::Google,
+                _ => Provider::Openai,
+            },
+            pane,
+        )
+    }
+    fn profile_for_provider(
+        state: &StorageState,
+        backend: &BackendState,
+        endpoint: String,
+        kind: BackendKind,
+        provider: Provider,
+        pane: &str,
+    ) -> BackendProfile {
         let storage = state.get().unwrap();
         let profile = storage
             .save_backend_profile(SaveProfile {
@@ -535,11 +556,7 @@ mod tests {
                 config: ProfileConfig {
                     name: pane.into(),
                     kind,
-                    provider: match kind {
-                        BackendKind::AnthropicMessages => Provider::Anthropic,
-                        BackendKind::GeminiInteractions => Provider::Google,
-                        _ => Provider::Openai,
-                    },
+                    provider,
                     endpoint,
                     binary_path: String::new(),
                     enabled: true,
@@ -917,6 +934,113 @@ sleep 60
             server.await.unwrap();
         }
     }
+    #[tokio::test]
+    async fn compatible_vendors_resume_reasoning_and_persist_partial_errors_without_retry() {
+        for case in super::super::compatible::fixtures::cases() {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+            let model = case.model.clone();
+            let provider = case.provider;
+            let server_model = model.clone();
+            let server = tokio::spawn(async move {
+                for round in 0..3 {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let (headers, body) = read_request(&mut socket).await;
+                    assert!(headers.starts_with("post /v1/chat/completions "));
+                    assert!(headers.contains("authorization: bearer fixture-key"));
+                    assert_eq!(body["model"], server_model);
+                    assert_eq!(body["max_tokens"], 4096);
+                    assert!(body.get("max_completion_tokens").is_none());
+                    assert_eq!(body.get("stream_options").is_some(), case.stream_options);
+                    if case.stream_options {
+                        assert_eq!(body["stream_options"]["include_usage"], true);
+                    }
+                    for forbidden in [
+                        "tools",
+                        "tool_choice",
+                        "temperature",
+                        "top_p",
+                        "thinking",
+                        "enable_thinking",
+                    ] {
+                        assert!(body.get(forbidden).is_none(), "{provider:?}: {forbidden}");
+                    }
+                    assert!(!body.to_string().contains("fixture-key"));
+                    let messages = body["messages"].as_array().unwrap();
+                    assert_eq!(messages.len(), 2 + 2 * round);
+                    assert_eq!(messages[0]["role"], "system");
+                    if round > 0 {
+                        assert_eq!(messages[2]["content"], "Bonjour 🌍");
+                        assert_eq!(messages[2]["reasoning_content"], "fixture 思考");
+                    }
+                    let wire = if round == 2 {
+                        format!(
+                            "data: {{\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"partial\"}}}}]}}\n\ndata: {}\n\n",
+                            case.error_event
+                        )
+                    } else {
+                        case.wire()
+                    };
+                    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", wire.len()).as_bytes()).await.unwrap();
+                    for chunk in wire.as_bytes().chunks(7) {
+                        socket.write_all(chunk).await.unwrap();
+                    }
+                }
+            });
+            let directory = tempfile::tempdir().unwrap();
+            let storage = StorageState::new(Ok(directory.path().join("compatible.sqlite3")));
+            let backend = BackendState::default();
+            let profile = profile_for_provider(
+                &storage,
+                &backend,
+                endpoint,
+                BackendKind::OpenaiCompatible,
+                provider,
+                "main",
+            );
+            for round in 0..3 {
+                let (events, mut rx) = channel();
+                let mut request = request(&profile, "main");
+                request.model = model.clone();
+                backend
+                    .start(storage.clone(), request, events)
+                    .await
+                    .unwrap();
+                let final_event = terminal(&mut rx).await;
+                assert_eq!(
+                    final_event["status"],
+                    if round < 2 { "complete" } else { "failed" },
+                    "{provider:?}: {final_event}"
+                );
+                assert_eq!(
+                    final_event["text"],
+                    if round < 2 { "Bonjour 🌍" } else { "partial" }
+                );
+                if round < 2 {
+                    assert_eq!(final_event["usage"]["total_tokens"], 28);
+                }
+                assert!(!final_event.to_string().contains("fixture-secret"));
+                idle(&backend, "main").await;
+            }
+            let saved = storage.get().unwrap().read("main").unwrap();
+            assert_eq!(saved.messages.len(), 6);
+            assert_eq!(
+                saved.messages[1].usage.as_ref().unwrap()["total_tokens"],
+                28
+            );
+            assert_eq!(saved.messages[5].text, "partial");
+            assert_eq!(saved.messages[5].status, "failed");
+            assert!(
+                !saved
+                    .messages
+                    .iter()
+                    .any(|m| m.text.contains("fixture 思考"))
+            );
+            assert_eq!(storage.get().unwrap().api_history("main").unwrap().len(), 2);
+            server.await.unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn disconnect_cancels_only_its_profile_and_keeps_the_other_request_live() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

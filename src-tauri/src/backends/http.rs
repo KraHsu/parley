@@ -1,7 +1,7 @@
 use super::{
     credentials::Credential,
     sse::Decoder,
-    types::{BackendKind, BackendProfile, Provider},
+    types::{BackendKind, BackendProfile},
 };
 use crate::storage::api::ApiTurn;
 use futures_util::StreamExt;
@@ -50,74 +50,41 @@ pub fn request_body(
     history: &[(String, String, Option<Value>)],
 ) -> Result<(Value, bool), String> {
     let system = instructions(turn);
-    let mut size = turn.input.len() + system.len();
-    let mut selected = Vec::new();
-    for (user, assistant, output) in history.iter().rev() {
-        let length = user.len()
-            + output
-                .as_ref()
-                .map_or(assistant.len(), |v| v.to_string().len());
-        if size + length > MAX_CONTEXT {
-            break;
-        }
-        size += length;
-        selected.push((user, assistant, output));
-    }
-    if size > MAX_CONTEXT {
-        return Err("本次输入超出上下文预算，请缩短输入。".into());
-    }
-    let clipped = selected.len() != history.len();
-    selected.reverse();
     let kind = turn.profile.config.kind;
+    let current = if kind == BackendKind::GeminiInteractions {
+        json!({"type":"user_input","content":[{"type":"text","text":turn.input}]})
+    } else {
+        json!({"role":"user","content":turn.input})
+    };
     let mut input = Vec::new();
     if kind == BackendKind::OpenaiCompatible {
         input.push(json!({"role":"system","content":system}));
     }
-    for (user, assistant, output) in selected {
-        if kind == BackendKind::GeminiInteractions {
-            input.push(json!({"type":"user_input","content":[{"type":"text","text":user}]}));
-            let steps = output
-                .as_ref()
-                .and_then(Value::as_array)
-                .ok_or("Gemini 续聊状态缺失，请新建对话。")?;
-            input.extend(steps.iter().cloned());
-        } else {
-            input.push(json!({"role":"user","content":user}));
-            match kind {
-                BackendKind::OpenaiResponses => {
-                    if let Some(Value::Array(items)) = output {
-                        input.extend(items.iter().cloned());
-                    } else {
-                        input.push(json!({"role":"assistant","content":assistant}));
-                    }
-                }
-                BackendKind::AnthropicMessages => {
-                    let content = output
-                        .as_ref()
-                        .filter(|v| v.is_array())
-                        .cloned()
-                        .unwrap_or_else(|| json!([{"type":"text","text":assistant}]));
-                    input.push(json!({"role":"assistant","content":content}));
-                }
-                _ => {
-                    let mut message = json!({"role":"assistant","content":assistant});
-                    if let Some(reasoning) = output
-                        .as_ref()
-                        .and_then(|o| o.get("reasoning_content"))
-                        .and_then(Value::as_str)
-                    {
-                        message["reasoning_content"] = json!(reasoning);
-                    }
-                    input.push(message);
-                }
-            }
+    // Count serialized content, including visible answers, reasoning and escaped
+    // characters. A continuation object need not contain the visible answer.
+    let mut size =
+        serde_json::to_vec(&input).expect("input serializes").len() + current.to_string().len() + 1;
+    if kind != BackendKind::OpenaiCompatible {
+        size += json!(system).to_string().len();
+    }
+    if size > MAX_CONTEXT {
+        return Err("本次输入超出上下文预算，请缩短输入。".into());
+    }
+    let mut selected = Vec::new();
+    for (user, assistant, output) in history.iter().rev() {
+        let pair = history_pair(kind, user, assistant, output)?;
+        let length = serde_json::to_vec(&pair).expect("history serializes").len();
+        if size + length > MAX_CONTEXT {
+            break;
         }
+        size += length;
+        selected.push(pair);
     }
-    if kind == BackendKind::GeminiInteractions {
-        input.push(json!({"type":"user_input","content":[{"type":"text","text":turn.input}]}));
-    } else {
-        input.push(json!({"role":"user","content":turn.input}));
+    let clipped = selected.len() != history.len();
+    for pair in selected.into_iter().rev() {
+        input.extend(pair);
     }
+    input.push(current);
     let body = match kind {
         BackendKind::OpenaiResponses => {
             json!({"model":turn.model,"instructions":system,"input":input,"stream":true,"store":false,"include":["reasoning.encrypted_content"],"max_output_tokens":4096})
@@ -128,18 +95,57 @@ pub fn request_body(
         BackendKind::GeminiInteractions => {
             json!({"model":turn.model,"system_instruction":system,"input":input,"stream":true,"store":false,"generation_config":{"max_output_tokens":4096}})
         }
-        BackendKind::OpenaiCompatible => {
-            let mut body = json!({"model":turn.model,"messages":input,"stream":true,"stream_options":{"include_usage":true}});
-            body[if turn.profile.config.provider == Provider::Openai {
-                "max_completion_tokens"
-            } else {
-                "max_tokens"
-            }] = json!(4096);
-            body
-        }
+        BackendKind::OpenaiCompatible => super::compatible::request(turn, input),
         _ => return Err("此后端不是直接 API 协议。".into()),
     };
     Ok((body, clipped))
+}
+
+fn history_pair(
+    kind: BackendKind,
+    user: &str,
+    assistant: &str,
+    output: &Option<Value>,
+) -> Result<Vec<Value>, String> {
+    if kind == BackendKind::GeminiInteractions {
+        let steps = output
+            .as_ref()
+            .and_then(Value::as_array)
+            .ok_or("Gemini 续聊状态缺失，请新建对话。")?;
+        let mut pair = vec![json!({"type":"user_input","content":[{"type":"text","text":user}]})];
+        pair.extend(steps.iter().cloned());
+        return Ok(pair);
+    }
+    let mut pair = vec![json!({"role":"user","content":user})];
+    match kind {
+        BackendKind::OpenaiResponses => {
+            if let Some(Value::Array(items)) = output {
+                pair.extend(items.iter().cloned());
+            } else {
+                pair.push(json!({"role":"assistant","content":assistant}));
+            }
+        }
+        BackendKind::AnthropicMessages => {
+            let content = output
+                .as_ref()
+                .filter(|v| v.is_array())
+                .cloned()
+                .unwrap_or_else(|| json!([{"type":"text","text":assistant}]));
+            pair.push(json!({"role":"assistant","content":content}));
+        }
+        _ => {
+            let mut message = json!({"role":"assistant","content":assistant});
+            if let Some(reasoning) = output
+                .as_ref()
+                .and_then(|o| o.get("reasoning_content"))
+                .and_then(Value::as_str)
+            {
+                message["reasoning_content"] = json!(reasoning);
+            }
+            pair.push(message);
+        }
+    }
+    Ok(pair)
 }
 
 fn authenticated(
@@ -292,7 +298,7 @@ pub struct Output {
     pub(super) blocks: Vec<Value>,
     pub(super) open_block: Option<usize>,
     pub(super) started: bool,
-    reasoning: String,
+    pub(super) reasoning: String,
 }
 
 impl Output {
@@ -301,14 +307,10 @@ impl Output {
             return Ok(());
         }
         if data == "[DONE]" {
-            if kind != BackendKind::OpenaiCompatible || self.finish.as_deref() != Some("stop") {
-                return Err("回复未正常完成，已保留部分内容。".into());
+            if kind != BackendKind::OpenaiCompatible {
+                return Err("收到不匹配的协议结束标识。".into());
             }
-            self.complete = true;
-            if !self.reasoning.is_empty() {
-                self.continuation = Some(json!({"reasoning_content":self.reasoning}));
-            }
-            return Ok(());
+            return self.finish_compatible();
         }
         let value: Value = serde_json::from_str(data).map_err(|_| "服务返回了无效的流式 JSON。")?;
         if value.get("error").is_some_and(|v| !v.is_null()) || value["type"] == "error" {
@@ -381,34 +383,7 @@ impl Output {
                 _ => {}
             }
         } else {
-            if let Some(usage) = value.get("usage").filter(|v| v.is_object()) {
-                self.usage = Some(usage.clone());
-            }
-            if let Some(choices) = value["choices"].as_array() {
-                for choice in choices {
-                    if choice["index"].as_u64().unwrap_or(0) != 0 {
-                        continue;
-                    }
-                    if choice["delta"]
-                        .get("tool_calls")
-                        .is_some_and(|v| !v.is_null() && v.as_array().is_none_or(|a| !a.is_empty()))
-                        || choice["delta"]
-                            .get("function_call")
-                            .is_some_and(|v| !v.is_null())
-                    {
-                        return Err("纯聊天后端收到工具调用，已停止。".into());
-                    }
-                    if let Some(text) = choice["delta"]["content"].as_str() {
-                        self.text.push_str(text);
-                    }
-                    if let Some(text) = choice["delta"]["reasoning_content"].as_str() {
-                        self.reasoning.push_str(text);
-                    }
-                    if let Some(reason) = choice["finish_reason"].as_str() {
-                        self.finish = Some(reason.into());
-                    }
-                }
-            }
+            self.compatible(&value)?;
         }
         if self.text.len() + self.reasoning.len() > MAX_RESPONSE {
             return Err("模型回复过长，已停止接收。".into());
@@ -541,11 +516,13 @@ mod tests {
         assert_eq!(out.continuation.unwrap()["reasoning_content"], "thought");
         for reason in ["length", "tool_calls", "content_filter"] {
             let mut out = Output::default();
-            out.accept(
-                BackendKind::OpenaiCompatible,
-                &json!({"choices":[{"index":0,"delta":{},"finish_reason":reason}]}).to_string(),
-            )
-            .unwrap();
+            assert!(
+                out.accept(
+                    BackendKind::OpenaiCompatible,
+                    &json!({"choices":[{"index":0,"delta":{},"finish_reason":reason}]}).to_string(),
+                )
+                .is_err()
+            );
             assert!(out.accept(BackendKind::OpenaiCompatible, "[DONE]").is_err());
             assert!(!out.complete);
         }

@@ -1,0 +1,150 @@
+[
+  {
+    "provider": "deepseek",
+    "model": "deepseek-v4-pro",
+    "stream_options": true,
+    "events": [
+      {
+        "id": "shared-upstream-id",
+        "choices": [
+          {
+            "index": 0,
+            "delta": { "role": "assistant", "content": null, "reasoning_content": "fixture 思考" },
+            "finish_reason": null
+          }
+        ]
+      },
+      {
+        "choices": [
+          {
+            "index": 0,
+            "delta": { "content": "Bonjour 🌍", "reasoning_content": null },
+            "finish_reason": null
+          }
+        ]
+      },
+      {
+        "choices": [{ "index": 0, "delta": { "content": "" }, "finish_reason": "stop" }],
+        "usage": {
+          "prompt_tokens": 20,
+          "completion_tokens": 8,
+          "total_tokens": 28,
+          "prompt_cache_hit_tokens": 12,
+          "prompt_cache_miss_tokens": 8
+        }
+      }
+    ],
+    "error_event": {
+      "error": { "type": "server_error", "message": "fixture-secret", "code": "server_error" }
+    }
+  },
+  {
+    "provider": "qwen",
+    "model": "qwen3.8-max",
+    "stream_options": true,
+    "events": [
+      {
+        "object": "chat.completion.chunk",
+        "usage": null,
+        "choices": [
+          {
+            "index": 0,
+            "delta": { "role": "assistant", "content": null, "reasoning_content": "fixture 思考" },
+            "logprobs": null,
+            "finish_reason": null
+          }
+        ]
+      },
+      { "choices": [{ "index": 0, "delta": { "content": "Bonjour 🌍" }, "finish_reason": null }] },
+      {
+        "choices": [
+          {
+            "index": 0,
+            "delta": { "content": "", "reasoning_content": null },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": null
+      },
+      {
+        "choices": [],
+        "usage": { "prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28 }
+      }
+    ],
+    "error_event": {
+      "error": {
+        "type": "invalid_request_error",
+        "message": "fixture-secret",
+        "code": "invalid_request_error"
+      }
+    }
+  },
+  {
+    "provider": "kimi",
+    "model": "kimi-k3",
+    "stream_options": true,
+    "events": [
+      {
+        "id": "shared-upstream-id",
+        "choices": [
+          { "index": 0, "delta": { "role": "assistant", "content": "" }, "finish_reason": null }
+        ]
+      },
+      {
+        "choices": [
+          { "index": 0, "delta": { "reasoning_content": "fixture 思考" }, "finish_reason": null }
+        ]
+      },
+      { "choices": [{ "index": 0, "delta": { "content": "Bonjour 🌍" }, "finish_reason": null }] },
+      {
+        "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }],
+        "usage": {
+          "prompt_tokens": 20,
+          "completion_tokens": 8,
+          "total_tokens": 28,
+          "cached_tokens": 12
+        }
+      }
+    ],
+    "error_event": {
+      "error": { "type": "server_error", "message": "fixture-secret", "code": "server_error" }
+    }
+  },
+  {
+    "provider": "zai",
+    "model": "glm-5.3",
+    "stream_options": false,
+    "events": [
+      {
+        "choices": [
+          {
+            "index": 0,
+            "delta": { "reasoning_content": "fixture 思考", "tool_calls": [] },
+            "finish_reason": null
+          }
+        ]
+      },
+      {
+        "choices": [
+          {
+            "index": 0,
+            "delta": { "content": "Bonjour 🌍", "tool_calls": null },
+            "finish_reason": null
+          }
+        ]
+      },
+      {
+        "choices": [
+          { "index": 0, "delta": { "role": "assistant", "content": "" }, "finish_reason": "stop" }
+        ],
+        "usage": {
+          "prompt_tokens": 20,
+          "completion_tokens": 8,
+          "total_tokens": 28,
+          "prompt_tokens_details": { "cached_tokens": 12 }
+        }
+      }
+    ],
+    "error_event": { "code": 1301, "message": "fixture-secret" }
+  }
+]
