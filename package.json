@@ -25,7 +25,7 @@
     "cli": "cargo run --locked --bin parley-cli --",
     "cli:build": "npm run desktop:check -- -- --locked && cargo build --locked --bin parley-cli",
     "tutor:dev": "tauri dev -- -- --tutor-only",
-    "package:linux": "tauri build --bundles deb -- --locked && node scripts/finalize-deb.mjs",
+    "package:linux": "tauri build --bundles deb -- --locked && node scripts/finalize-deb.mjs && node scripts/check-deb.mjs",
     "web:dev": "vite --mode web",
     "web:build": "vue-tsc --noEmit && vite build --mode web && node scripts/check-web-build.mjs",
     "web:preview": "vite preview --mode web --host 127.0.0.1"

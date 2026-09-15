@@ -12,7 +12,7 @@ Parley 是一个开源、以本地数据为主的语言学习桌面客户端，�
 
 ## 下载安装
 
-从 [GitHub Releases](https://github.com/KraHsu/parley/releases) 下载 Linux 安装包。当前提供 Ubuntu 24.04 x86_64 预览版，包含桌面程序和 `parley-cli`；安装后无需编译源码。步骤见 [安装说明](docs/INSTALL.md)。
+Linux 安装包面向 Ubuntu 24.04 x86_64，包含桌面程序和 `parley-cli`。旧版 `Parley_0.3.0_amd64.deb` 与 KDE Parley 包名冲突，请勿继续安装；当前修复包改用 `parley-desktop` 包名和 `ParleyDesktop_…` 文件名。下载、构建及已有系统的修复步骤见 [安装说明](docs/INSTALL.md)。
 
 ## 终端 Codex + 语法助手
 
