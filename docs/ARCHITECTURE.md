@@ -50,7 +50,13 @@ IndexedDB v2 使用 `workspace`、`profiles`、`conversations`、`messages`、`w
 
 Web 新备份使用 `.jsonl`：元数据、服务、会话、消息、词句分别成行，以带记录计数的结束行检测截断；导入逐行读取。旧 `.json` 仍可导入，不再采用不对称的 32 MiB 总量限制。两种备份都校验字段和记录数量，排除密钥与协议私有续聊数据。
 
-桌面和 Web 的完整备份格式仍有区别：桌面包含多个来源、多义词条、双向复习等信息。共用字段规则不代表两个文件格式可以互换；跨端迁移需显式定义这些信息的映射，不能直接把桌面 JSON 当 Web 备份打开。
+词句迁移共用 `parley-vocabulary` JSON v3，读入兼容 v1/v2。`src/shared/learning-exchange.ts` 校验来源、卡片和历史，`src/web/learning-exchange.ts` 负责词句投影、预览与合并。Web 在词条内保留完整学习记录，编辑和识义评分同步更新这些记录，其他来源、表达卡片和回收站不会在往返中丢失。完整 Web 工作区备份仍使用独立入口，词句迁移不会改动对话和凭据。
+
+## 凭据辨认与伴随窗口
+
+`backend_credential_salts` 和 `backend_credential_scopes` 用每个服务独立的随机盐与 SHA-256 辨认重填的密钥，指纹包含服务 ID 和地址，绑定沿用原 scope。原始密钥仍只在内存或系统凭据库。旧绑定只能在核对原密钥后补录，不根据历史记录猜测账号。
+
+`launcher.rs` 启动官方 CLI；`companion.rs` 保存重连所需的元数据；`terminal.rs` 的短时回调将 Claude 可见上下文原子写入独立缓存。GUI 只是读取方，关闭与重开不影响回调，也无需监听 HTTP 端口。`--reconnect` 复用会话 ID、启动时间、工作目录和 CLI 路径。
 
 ## 测试与发布
 

@@ -3,6 +3,19 @@
 // expose SQLite insertion order used by the pre-Diesel repositories.
 
 diesel::table! {
+    backend_credential_salts (profile_id) {
+        profile_id -> Text,
+        salt -> Text,
+    }
+}
+diesel::table! {
+    backend_credential_scopes (profile_id, fingerprint) {
+        profile_id -> Text,
+        fingerprint -> Text,
+        scope -> Text,
+    }
+}
+diesel::table! {
     backend_credentials (profile_id) {
         profile_id -> Text,
         slot_id -> Text,

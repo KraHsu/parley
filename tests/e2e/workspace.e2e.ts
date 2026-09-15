@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import { test, expect, type Page } from '@playwright/test'
 async function ready(page: Page) {
   await page.goto('./')
@@ -216,4 +217,95 @@ test('paginates a large word list and searches across all pages', async ({ page 
   await expect(page.locator('.word-grid > article')).toHaveCount(25)
   await page.getByLabel('搜索词句', { exact: true }).fill('meaning 1')
   await expect(page.getByRole('heading', { name: 'word 1', exact: true })).toBeVisible()
+})
+
+test('imports desktop learning data, edits and exports it without losing history, keys or chats', async ({
+  page,
+}) => {
+  await ready(page)
+  await page.getByLabel('main 输入', { exact: true }).fill('A draft to preserve')
+  await page.getByRole('button', { name: /^词句/ }).click()
+  await page.getByText('词句迁移 · Web ↔ 桌面', { exact: true }).click()
+  await page.getByLabel('导入词句 JSON 文件').setInputFiles('fixtures/learning-exchange.json')
+  const preview = page.getByRole('dialog', { name: '导入词句预览' })
+  await expect(preview).toContainText('新增 2')
+  await preview.getByRole('button', { name: '确认导入词句' }).click()
+  await expect(preview).not.toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Ça marche', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await expect(page.getByLabel('Fixture API API Key', { exact: true })).toHaveValue('fixture-key')
+  await page.getByRole('button', { name: '完成', exact: true }).click()
+  const card = page
+    .locator('.word-card')
+    .filter({ has: page.getByRole('heading', { name: 'Ça marche', exact: true }) })
+  await card.getByRole('button', { name: '编辑', exact: true }).click()
+  const editor = page.getByRole('dialog', { name: '收藏词句' })
+  await expect(editor).toContainText('2 个来源 · 2 张卡片 · 2 次复习')
+  await editor.getByLabel('我的注释', { exact: true }).fill('Edited on Web')
+  await editor.getByRole('button', { name: '保存词句', exact: true }).click()
+  await expect(editor).not.toBeVisible()
+  await page.getByRole('button', { name: '回收站 · 1', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'à bientôt', exact: true })).toBeVisible()
+  const downloaded = page.waitForEvent('download')
+  await page.getByRole('button', { name: '导出词句 JSON', exact: true }).click()
+  const file = await downloaded
+  const exported = JSON.parse(await readFile((await file.path())!, 'utf8'))
+  expect(exported.version).toBe(3)
+  expect(exported.entries).toHaveLength(2)
+  expect(exported.entries[0].fields.note).toBe('Edited on Web')
+  expect(exported.entries[0].occurrences).toHaveLength(2)
+  expect(exported.entries[0].cards).toHaveLength(2)
+  expect(exported.entries[0].reviews).toHaveLength(2)
+  expect(exported.entries[1].deletedAt).not.toBeNull()
+  expect(JSON.stringify(exported)).not.toContain('fixture-key')
+  const drafts = await page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve) => {
+      const req = indexedDB.open('parley-web')
+      req.onsuccess = () => resolve(req.result)
+    })
+    const records = await new Promise<{ draft: string }[]>((resolve) => {
+      const req = db.transaction('conversations').objectStore('conversations').getAll()
+      req.onsuccess = () => resolve(req.result)
+    })
+    db.close()
+    return records.map((c) => c.draft)
+  })
+  expect(drafts).toContain('A draft to preserve')
+  await page.reload()
+  await page.getByRole('button', { name: /^词句/ }).click()
+  await page.getByText('词句迁移 · Web ↔ 桌面', { exact: true }).click()
+  await page.getByLabel('导入词句 JSON 文件').setInputFiles('fixtures/learning-exchange.json')
+  await expect(preview).toContainText('重复 2')
+  await preview.getByRole('button', { name: '确认导入词句' }).click()
+  await expect(page.getByText('Edited on Web', { exact: true })).toBeVisible()
+})
+
+test('failed learning import keeps original words and the import preview', async ({ page }) => {
+  await page.addInitScript(() => {
+    const original = IDBObjectStore.prototype.put
+    IDBObjectStore.prototype.put = function (...args: Parameters<typeof original>) {
+      const request = original.apply(this, args)
+      if ((window as unknown as { failSave: boolean }).failSave && this.name === 'words')
+        this.transaction.abort()
+      return request
+    }
+  })
+  await ready(page)
+  const editor = await addWord(page)
+  await editor.getByRole('button', { name: '保存词句' }).click()
+  await expect(editor).not.toBeVisible()
+  await page.getByText('词句迁移 · Web ↔ 桌面', { exact: true }).click()
+  await page.getByLabel('导入词句 JSON 文件').setInputFiles('fixtures/learning-exchange.json')
+  const preview = page.getByRole('dialog', { name: '导入词句预览' })
+  await expect(preview).toBeVisible()
+  await page.evaluate(() => {
+    ;(window as unknown as { failSave: boolean }).failSave = true
+  })
+  await preview.getByRole('button', { name: '确认导入词句' }).click()
+  await expect(preview.getByRole('alert')).toContainText('本地保存失败')
+  await expect(preview).toBeVisible()
+  await page.reload()
+  await page.getByRole('button', { name: /^词句/ }).click()
+  await expect(page.getByRole('heading', { name: 'break the ice', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Ça marche', exact: true })).toHaveCount(0)
 })

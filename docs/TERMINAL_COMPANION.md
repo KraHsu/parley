@@ -52,7 +52,7 @@ Codex 模式下，启动器不注入主对话 prompt 或配置，不解析终端
 
 协议依据：[Codex CLI](https://learn.chatgpt.com/docs/cli)、[App Server 的会话读取接口](https://learn.chatgpt.com/docs/app-server)。
 
-## Claude Code（开发分支，尚未发布）
+## Claude Code
 
 源码构建后可以运行用户安装的原生 Claude Code，并让语法窗口使用设置中单独选择的助手服务：
 
@@ -64,10 +64,18 @@ target/debug/parley-cli --backend claude-code --claude /path/to/claude -- --resu
 
 省略 `--claude` 时，读取设置中唯一的已启用 Claude Code 路径；存在多个不同路径时要求显式选择。原生终端保留官方登录、用户配置、工具及交互；GUI 助手使用 API 时仍消耗对应 API 额度。
 
-启动器为这次运行添加一个临时 hooks 插件，用户已有的 `--settings` 与 `--plugin-dir` 参数保持有效。插件只向语法窗口的回环接收器发送会话、用户输入和完成回答，接收器不会向 Claude 注入文本或控制决定。没有修改全局 hooks，也不解析终端画面。
+启动器为这次运行添加一个局部 hooks 插件，用户已有的 `--settings` 与 `--plugin-dir` 参数保持有效。每次事件直接执行本机 `parley-cli` 回调，将可见用户输入和完成回答写入私有缓存；原始 hooks 载荷不落盘。回调不依赖语法窗口，不向 Claude 注入文本或控制决定，也不修改全局 hooks 或解析终端画面。采用官方 [command hooks 的 exec 参数形式](https://code.claude.com/docs/en/hooks#exec-form-and-shell-form)，路径不经过 shell 拼接。
 
-同步只覆盖本次启动后收到的最近十二条消息；恢复会话之前的历史暂不读取。选中词句后可以解释、翻译或保存，界面会显示即将接收引用内容的助手服务。来源用独立的 Claude Code 命名空间保存，避免与 Codex thread 混淆；当前开发版的 JSON v2 备份保留这些来源信息，同时支持导入旧版 v1。
+同步只覆盖本次启动后收到的最近十二条消息；恢复会话之前的历史暂不读取。选中词句后可以解释、翻译或保存，界面会显示即将接收引用内容的助手服务。来源用独立的 Claude Code 命名空间保存，避免与 Codex thread 混淆；词句 JSON v3 保留这些来源信息，可以迁移到 Web，同时支持导入旧版 v1/v2。
 
-语法窗口关闭后，原生 CLI 继续运行；接收器停止，Claude 可能显示非阻塞的 hook 连接提示。需要重新同步时重新运行终端伴随启动器。`--no-gui` 完全不添加同步插件；bare / safe 模式或管理策略禁用 hooks 时，终端仍可使用，GUI 显示尚未接收到事件。
+语法窗口关闭后，原生 CLI 继续运行，本地回调继续保存最近十二条消息。使用 `parley-cli --reconnect` 只重开当前目录最近一次伴随会话的语法窗口，不启动第二个 CLI；多个会话可以用 `--list-companions` 查看，再用 `--reconnect --session ID` 指定。关闭窗口不会再导致 HTTP hook 连接失败。`--no-gui` 完全不添加同步插件；bare / safe 模式或管理策略禁用 hooks 时，终端仍可使用，GUI 显示尚未接收到事件。
 
 已验证 Linux 本机 Claude Code `2.1.269` 的 hooks 投递及与已有 Stop hook 共存；另通过原生已登录 TUI 完成两轮真实回复，自动同步到 GUI，并配合 API fixture 答疑及保存终端来源词句。Codex `0.154.0 / gpt-5.6-luna` 也已通过原生 TUI、API fixture 解释、收藏与 GUI 重启恢复。两项组合均从 Linux 开发 deb 解包运行，API 侧尚未调用真实厂商；Windows/macOS 原生窗口仍待验收。详细证据见[多后端实现记录](MULTI_BACKEND_IMPLEMENTATION.md)。
+
+## 重连与缓存
+
+上述重连入口同时支持 Codex 和 Claude Code。Codex 重连后仍通过官方历史接口读取，Claude 从本地缓存继续显示；启动前未收到的 Claude 历史仍不读取。当前源码的新入口需要重新构建，旧 alpha.2 安装包不包含这些改动。
+
+伴随记录位于系统缓存目录下的 `org.parley.desktop/companions/<ID>`；Linux 通常为 `~/.cache/org.parley.desktop/companions`，遵循 `XDG_CACHE_HOME`。每次启动保留启动参数和至多 20 个会话、每会话最近十二条可见消息，每条最多 16,000 字符。Unix 会话目录权限为 0700，文件原子替换并由文件锁串行更新。
+
+缓存允许终端退出后重新查看最近内容，不表示终端仍在线。结束使用后可删除对应 ID 的缓存目录；旧回调不会重建已经删除的目录。缓存不进入词句备份，只有主动收藏的原句随词句导出。

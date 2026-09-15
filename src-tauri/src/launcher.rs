@@ -2,7 +2,7 @@
 use crate::storage::Preferences;
 use crate::storage::schema::preferences as pref;
 use diesel::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
@@ -25,7 +25,7 @@ pub(crate) fn codex_command(binary: &Path) -> Command {
     command
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TerminalBackend {
     #[default]
@@ -63,7 +63,7 @@ pub struct LaunchOptions {
     pub terminal_started_at: u64,
     pub terminal_backend: TerminalBackend,
     #[serde(skip)]
-    pub terminal_ready: Option<PathBuf>,
+    pub terminal_session: Option<PathBuf>,
 }
 impl LaunchOptions {
     pub fn from_environment() -> Self {
@@ -80,7 +80,7 @@ impl LaunchOptions {
                         .and_then(|v| TerminalBackend::parse(&v).ok())
                         .unwrap_or_default()
                 }
-                "--terminal-ready" => result.terminal_ready = args.next().map(PathBuf::from),
+                "--terminal-session" => result.terminal_session = args.next().map(PathBuf::from),
                 "--terminal-started-at" => {
                     result.terminal_started_at =
                         args.next().and_then(|v| v.parse().ok()).unwrap_or(0)
@@ -103,6 +103,9 @@ struct CliOptions {
     codex: Option<PathBuf>,
     gui: Option<PathBuf>,
     no_gui: bool,
+    reconnect: bool,
+    list_companions: bool,
+    session: Option<String>,
     help: bool,
     args: Vec<OsString>,
 }
@@ -129,6 +132,16 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<CliOptions, String>
                 options.gui = Some(args.next().ok_or("--gui-bin 需要路径")?.into())
             }
             Some("--no-gui") => options.no_gui = true,
+            Some("--reconnect") => options.reconnect = true,
+            Some("--list-companions") => options.list_companions = true,
+            Some("--session") => {
+                options.session = Some(
+                    args.next()
+                        .ok_or("--session 需要会话 ID")?
+                        .into_string()
+                        .map_err(|_| "会话 ID 无效")?,
+                )
+            }
             Some("--help" | "-h") => options.help = true,
             Some("--") => {
                 options.args.extend(args);
@@ -245,7 +258,8 @@ fn start_gui(
     binary: &Path,
     cwd: &Path,
     backend: TerminalBackend,
-    ready: Option<&Path>,
+    session: Option<&Path>,
+    started_at: u64,
 ) -> Result<std::process::Child, String> {
     if !gui.is_file() {
         return Err(format!(
@@ -261,21 +275,15 @@ fn start_gui(
         .arg("--terminal-cwd")
         .arg(cwd)
         .arg("--terminal-started-at")
-        .arg(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-                .to_string(),
-        )
+        .arg(started_at.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     if backend == TerminalBackend::Codex {
         command.arg("--codex-path").arg(binary);
     }
-    if let Some(ready) = ready {
-        command.arg("--terminal-ready").arg(ready);
+    if let Some(session) = session {
+        command.arg("--terminal-session").arg(session);
     }
     #[cfg(unix)]
     {
@@ -333,64 +341,34 @@ fn run(options: CliOptions) -> Result<i32, String> {
     let mut plugin = None;
     if !options.no_gui {
         if data_file().is_ok_and(|path| gui_running(&path)) {
-            return Err("Parley 工作区已经打开。请先正常关闭已有窗口，再启动终端伴随模式；只启动官方 CLI 可使用 --no-gui。".into());
+            return Err(
+                "Parley 工作区已经打开。请先关闭已有窗口；只启动官方 CLI 可使用 --no-gui。".into(),
+            );
         }
-        let gui = options.gui.unwrap_or_else(|| {
-            current.with_file_name(if cfg!(windows) {
-                "parley.exe"
-            } else {
-                "parley"
-            })
-        });
+        let gui = gui_binary(options.gui.as_deref(), &current);
         let cwd = if backend == TerminalBackend::Codex {
             terminal_cwd(&options.args)?
         } else {
             std::env::current_dir().map_err(|e| e.to_string())?
         };
-        let ready = if backend == TerminalBackend::ClaudeCode {
-            Some(
-                tempfile::Builder::new()
-                    .prefix("parley-ready-")
-                    .tempfile()
-                    .map_err(|e| e.to_string())?,
-            )
-        } else {
-            None
-        };
-        let mut child = start_gui(
+        let session = crate::companion::Companion::create(backend, &binary, &cwd)?;
+        let directory = session.directory()?;
+        if backend == TerminalBackend::ClaudeCode {
+            crate::terminal::plugin(&directory, &current)?;
+            plugin = Some(directory.clone());
+        }
+        start_gui(
             &gui,
             &binary,
             &cwd,
             backend,
-            ready.as_ref().map(|f| f.path()),
+            Some(&directory),
+            session.started_at,
         )?;
-        if let Some(ready) = ready {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-            while std::time::Instant::now() < deadline {
-                if let Ok(bytes) = std::fs::read(ready.path())
-                    && bytes.len() <= 8192
-                    && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
-                {
-                    plugin = value["pluginPath"]
-                        .as_str()
-                        .map(PathBuf::from)
-                        .filter(|p| p.is_absolute() && p.join("hooks/hooks.json").is_file());
-                    if plugin.is_some() {
-                        break;
-                    }
-                }
-                if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(25));
-            }
-            let _ = ready.close();
-            if plugin.is_none() {
-                eprintln!(
-                    "Parley 自动同步接收器未就绪；Claude Code 仍可正常使用。请检查语法窗口中的同步状态。"
-                );
-            }
-        }
+        eprintln!(
+            "Parley 语法窗口关闭后，可在另一个终端运行 parley-cli --reconnect --session {}。",
+            session.id
+        );
     }
     let mut command = codex_command(&binary);
     if let Some(plugin) = plugin {
@@ -415,7 +393,43 @@ fn run(options: CliOptions) -> Result<i32, String> {
         Ok(status.code().unwrap_or(1))
     }
 }
+fn gui_binary(selected: Option<&Path>, current: &Path) -> PathBuf {
+    selected.map(Path::to_owned).unwrap_or_else(|| {
+        current.with_file_name(if cfg!(windows) {
+            "parley.exe"
+        } else {
+            "parley"
+        })
+    })
+}
+fn reconnect(options: &CliOptions) -> Result<i32, String> {
+    if options.no_gui || !options.args.is_empty() {
+        return Err("重连只打开语法窗口，不接受原生 CLI 参数或 --no-gui。".into());
+    }
+    if data_file().is_ok_and(|path| gui_running(&path)) {
+        return Err("Parley 工作区已经打开，请先关闭已有窗口。".into());
+    }
+    let session = crate::companion::Companion::select(options.session.as_deref())?;
+    let current = std::env::current_exe().map_err(|e| e.to_string())?;
+    start_gui(
+        &gui_binary(options.gui.as_deref(), &current),
+        &session.binary,
+        &session.cwd,
+        session.backend,
+        Some(&session.directory()?),
+        session.started_at,
+    )?;
+    Ok(0)
+}
 pub fn run_cli() -> i32 {
+    // This callback never blocks a native model turn or writes messages into it.
+    let mut internal = std::env::args_os().skip(1);
+    if internal.next().as_deref() == Some(std::ffi::OsStr::new("--terminal-event")) {
+        if let Some(directory) = internal.next() {
+            let _ = crate::terminal::record(Path::new(&directory), std::io::stdin().lock());
+        }
+        return 0;
+    }
     let options = match parse(std::env::args_os().skip(1)) {
         Ok(options) => options,
         Err(error) => {
@@ -425,11 +439,28 @@ pub fn run_cli() -> i32 {
     };
     if options.help {
         println!(
-            "Parley — 官方 Codex / Claude Code TUI + 语法助手 GUI\n\n用法：parley-cli [--backend codex|claude-code] [--codex PATH|--claude PATH] [--no-gui] [--gui-bin PATH] [-- NATIVE_ARGS...]\n\n默认运行 Codex。CLI 路径读取设置，或通过参数显式指定。原生参数从 -- 之后或第一个非 Parley 参数开始原样传递。\n\n示例：\n  parley-cli\n  parley-cli --codex /path/to/codex -- resume --last\n  parley-cli --backend claude-code --claude /path/to/claude -- --resume SESSION_ID\n  parley-cli --backend claude-code --no-gui -- --help\n\nClaude 自动同步通过本次启动的局部 hooks 插件接收新轮次。关闭语法窗口不会结束终端会话。"
+            "Parley — 官方 Codex / Claude Code TUI + 语法助手 GUI\n\n用法：parley-cli [--backend codex|claude-code] [--codex PATH|--claude PATH] [--no-gui] [--gui-bin PATH] [-- NATIVE_ARGS...]\n\n默认运行 Codex。CLI 路径读取设置，或通过参数显式指定。原生参数从 -- 之后或第一个非 Parley 参数开始原样传递。\n\n示例：\n  parley-cli\n  parley-cli --codex /path/to/codex -- resume --last\n  parley-cli --backend claude-code --claude /path/to/claude -- --resume SESSION_ID\n  parley-cli --backend claude-code --no-gui -- --help\n\n重开语法窗口：parley-cli --reconnect（当前目录最近一次伴随会话）\n指定会话：parley-cli --reconnect --session ID\n查看可重连会话：parley-cli --list-companions\n\nClaude 自动同步通过本地 hooks 接收新轮次。关闭 GUI 后继续记录最近六轮，重连不启动第二个原生 CLI。"
         );
         return 0;
     }
-    match run(options) {
+    let result = if options.list_companions {
+        crate::companion::Companion::list().map(|sessions| {
+            for session in sessions {
+                println!(
+                    "{}  {}  {}",
+                    session.id,
+                    session.backend.key(),
+                    session.cwd.display()
+                );
+            }
+            0
+        })
+    } else if options.reconnect {
+        reconnect(&options)
+    } else {
+        run(options)
+    };
+    match result {
         Ok(code) => code,
         Err(error) => {
             eprintln!("Parley: {error}");

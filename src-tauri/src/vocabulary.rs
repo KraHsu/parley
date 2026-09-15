@@ -186,8 +186,8 @@ pub fn language(value: &str) -> Result<String> {
 }
 impl EntryFields {
     pub fn validate(&self, draft: bool) -> Result<()> {
-        bounded(&self.text, 2000, "词句")?;
-        bounded(&self.meaning, 8000, "释义")?;
+        bounded(&self.text, 10000, "词句")?;
+        bounded(&self.meaning, 10000, "释义")?;
         bounded(&self.note, 16000, "注释")?;
         bounded(&self.language_label, 100, "语言名称")?;
         bounded(&self.language, 100, "语言代码")?;
@@ -212,8 +212,8 @@ impl Source {
     pub fn validate(&self) -> Result<()> {
         if let Some(backend) = &self.backend {
             backend.validate()?;
-            if ["manual", "import"].contains(&self.source_kind.as_str()) {
-                return Err("手动或导入材料不能附带模型后端。".into());
+            if self.source_kind == "manual" {
+                return Err("手动材料不能附带模型后端。".into());
             }
             if self.source_kind == "terminal" && !backend.kind.is_cli() {
                 return Err("终端来源必须属于本机 CLI。".into());
@@ -243,8 +243,8 @@ impl Source {
         if self.source_kind == "terminal" && (self.thread_id.is_none() || self.item_id.is_none()) {
             return Err("终端来源缺少会话或消息标识。".into());
         }
-        bounded(&self.snapshot, 16000, "原句")?;
-        bounded(&self.selected_text, 2000, "选中文字")?;
+        bounded(&self.snapshot, 2_000_000, "原句")?;
+        bounded(&self.selected_text, 2_000_000, "选中文字")?;
         let chars: Vec<char> = self.snapshot.chars().collect();
         if self.start >= self.end
             || self.end > chars.len()

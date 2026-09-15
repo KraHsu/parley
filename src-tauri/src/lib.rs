@@ -1,6 +1,7 @@
 mod backends;
 mod chat;
 mod codex;
+mod companion;
 mod exchange;
 mod launcher;
 mod review;
@@ -34,18 +35,11 @@ pub fn run() {
             app.manage(storage::StorageState::new(path));
             let terminal = app
                 .state::<launcher::LaunchOptions>()
-                .terminal_ready
+                .terminal_session
                 .as_ref()
-                .map(|path| terminal::TerminalState::start(path))
-                .transpose();
-            match terminal {
-                Ok(value) => {
-                    app.manage(value.unwrap_or_default());
-                }
-                Err(_) => {
-                    app.manage(terminal::TerminalState::default());
-                }
-            }
+                .map(|path| terminal::TerminalState::attach(path))
+                .unwrap_or_default();
+            app.manage(terminal);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

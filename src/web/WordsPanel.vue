@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
+import LearningExchange from './LearningExchange.vue'
 import type { WebWorkspace } from './store'
 import type { Word } from './types'
 const props = defineProps<{ w: WebWorkspace }>()
@@ -13,17 +14,21 @@ const clock = setInterval(() => {
 }, 30000)
 onUnmounted(() => clearInterval(clock))
 const words = computed(() =>
-  props.w.state.words.filter((w) =>
-    [w.text, w.meaning, w.note, ...w.tags]
-      .join('\n')
-      .toLocaleLowerCase()
-      .includes(search.value.toLocaleLowerCase()),
+  props.w.state.words.filter(
+    (w) =>
+      (tab.value === 'trash'
+        ? w.learning?.entry.deletedAt != null
+        : w.learning?.entry.deletedAt == null) &&
+      [w.text, w.meaning, w.note, ...w.tags]
+        .join('\n')
+        .toLocaleLowerCase()
+        .includes(search.value.toLocaleLowerCase()),
   ),
 )
 const page = ref(1)
 const pageCount = computed(() => Math.max(1, Math.ceil(words.value.length / 50)))
 const visibleWords = computed(() => words.value.slice((page.value - 1) * 50, page.value * 50))
-watch(search, () => {
+watch([search, tab], () => {
   page.value = 1
 })
 watch(pageCount, (count) => {
@@ -31,7 +36,7 @@ watch(pageCount, (count) => {
 })
 const due = computed(() =>
   props.w.state.words
-    .filter((w) => w.review && w.review.dueAt <= now.value)
+    .filter((w) => w.learning?.entry.deletedAt == null && w.review && w.review.dueAt <= now.value)
     .sort((a, b) => a.review!.dueAt - b.review!.dueAt),
 )
 function grade(remembered: boolean) {
@@ -73,15 +78,18 @@ function add() {
       </div>
       <button class="primary" :disabled="!w.canEdit" @click="add">＋ 添加词句</button>
     </header>
+    <LearningExchange :w="w" />
     <div class="words-toolbar">
       <div class="segmented">
         <button :class="{ active: tab === 'list' }" @click="tab = 'list'">全部词句</button
         ><button :class="{ active: tab === 'review' }" @click="showReview">
-          复习 · {{ due.length }}
+          复习 · {{ due.length }}</button
+        ><button :class="{ active: tab === 'trash' }" @click="tab = 'trash'">
+          回收站 · {{ w.state.words.filter((w) => w.learning?.entry.deletedAt != null).length }}
         </button>
       </div>
       <input
-        v-if="tab === 'list'"
+        v-if="tab !== 'review'"
         v-model="search"
         aria-label="搜索词句"
         placeholder="搜索词句、释义、注释或标签"

@@ -4,7 +4,7 @@ use crate::vocabulary::{EntryFields, Occurrence, Result, bounded, uuid};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, sync::Mutex};
 
-pub const MAX_BYTES: u64 = 20 * 1024 * 1024;
+pub const MAX_BYTES: u64 = 512 * 1024 * 1024;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Backup {
@@ -67,8 +67,8 @@ fn valid_card(card: &Card, entry_id: &str) -> Result<()> {
     uuid(&card.id)?;
     if card.entry_id != entry_id
         || !["recognition", "production"].contains(&card.direction.as_str())
-        || card.stage > 5
-        || card.schedule_version != 1
+        || card.stage > if card.schedule_version == 1 { 5 } else { 6 }
+        || ![1, 2].contains(&card.schedule_version)
         || card.revision < 1
         || card.revision == i64::MAX
         || card.due_at < 0
@@ -81,7 +81,7 @@ fn valid_card(card: &Card, entry_id: &str) -> Result<()> {
 impl Backup {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         if bytes.len() as u64 > MAX_BYTES {
-            return Err("导入文件不能超过 20 MiB。".into());
+            return Err("导入文件不能超过 512 MiB。".into());
         }
         let backup: Self =
             serde_json::from_slice(bytes).map_err(|e| format!("无法读取词句备份：{e}"))?;
@@ -89,15 +89,15 @@ impl Backup {
         Ok(backup)
     }
     pub fn validate(&self) -> Result<()> {
-        if self.format != "parley-vocabulary" || ![1, 2].contains(&self.version) {
+        if self.format != "parley-vocabulary" || ![1, 2, 3].contains(&self.version) {
             return Err("不支持的词句备份格式或版本，请升级 Parley 后重试。".into());
         }
         uuid(&self.dataset_id)?;
         if self.exported_at < 0 {
             return Err("备份时间无效。".into());
         }
-        if self.entries.len() > 10000 {
-            return Err("一次最多导入 10,000 条词句。".into());
+        if self.entries.len() > 50000 {
+            return Err("一次最多导入 50,000 条词句。".into());
         }
         let mut ids = HashSet::new();
         let mut total_sources = 0;
@@ -114,11 +114,11 @@ impl Backup {
             {
                 return Err("词句时间无效。".into());
             }
-            if entry.occurrences.len() > 100 || entry.tags.len() > 20 || entry.cards.len() > 2 {
+            if entry.occurrences.len() > 100 || entry.tags.len() > 30 || entry.cards.len() > 2 {
                 return Err("单条词句超过来源、标签或卡片数量上限。".into());
             }
             for tag in &entry.tags {
-                bounded(tag, 50, "标签")?
+                bounded(tag, 100, "标签")?
             }
             let mut source_keys = HashSet::new();
             for source in &entry.occurrences {
@@ -130,13 +130,13 @@ impl Backup {
                 if self.version == 1 && source.source.backend.is_some() {
                     return Err("v1 备份不能包含 v2 后端来源字段。".into());
                 }
-                if self.version == 2
+                if self.version >= 2
                     && source.source.source_kind == "terminal"
                     && source.source.backend.is_none()
                 {
                     return Err("v2 终端来源缺少后端信息。".into());
                 }
-                if self.version == 2 && source.source.source_kind == "terminal" {
+                if self.version >= 2 && source.source.source_kind == "terminal" {
                     let claude =
                         source.source.backend.as_ref().is_some_and(|b| {
                             b.kind == crate::backends::types::BackendKind::ClaudeCode
@@ -206,7 +206,7 @@ use tauri::State;
 fn read_backup(path: &std::path::Path) -> Result<Backup> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     if file.metadata().map_err(|e| e.to_string())?.len() > MAX_BYTES {
-        return Err("导入文件不能超过 20 MiB。".into());
+        return Err("导入文件不能超过 512 MiB。".into());
     }
     let mut bytes = Vec::new();
     file.take(MAX_BYTES + 1)
@@ -245,11 +245,15 @@ pub async fn vocabulary_export(
     let path = file.path().to_owned();
     tauri::async_runtime::spawn_blocking(move || {
         let backup = storage.vocabulary_backup(include_trash)?;
+        backup.validate()?;
         let content = if format == "json" {
             serde_json::to_vec_pretty(&backup).map_err(|e| e.to_string())?
         } else {
             crate::storage::exchange::csv(&backup).into_bytes()
         };
+        if content.len() as u64 > MAX_BYTES {
+            return Err("导出超过 512 MiB，请分批整理词句后重试。".into());
+        }
         write_atomic(&path, &content)?;
         Ok(Some(path.display().to_string()))
     })

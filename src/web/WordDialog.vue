@@ -64,6 +64,17 @@ defineExpose({ show })
         <label>词句<textarea v-model="word.text" required maxlength="10000" /></label
         ><label>语言<input v-model="word.language" required maxlength="100" /></label>
         <blockquote v-if="word.source">{{ word.source.text }}</blockquote>
+        <details v-if="word.learning" class="help">
+          <summary>
+            迁移记录：{{ word.learning.entry.occurrences.length }} 个来源 ·
+            {{ word.learning.entry.cards.length }} 张卡片 ·
+            {{ word.learning.entry.reviews.length }} 次复习
+          </summary>
+          <p>Web 可以编辑词句并进行识义复习；其他来源、表达卡片和历史也会保留在导出文件中。</p>
+          <blockquote v-for="source in word.learning.entry.occurrences.slice(1)" :key="source.id">
+            {{ source.snapshot }}
+          </blockquote>
+        </details>
         <label
           >释义<textarea
             v-model="word.meaning"
@@ -73,7 +84,7 @@ defineExpose({ show })
         ><label
           >我的注释<textarea
             v-model="word.note"
-            maxlength="10000"
+            maxlength="16000"
             placeholder="搭配、语法或另一个例句"
           /></label
         ><label
