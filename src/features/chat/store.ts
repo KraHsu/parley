@@ -1,6 +1,7 @@
 import { computed, reactive, ref, watch, onScopeDispose, toRefs } from 'vue'
 import { defineStore, storeToRefs } from 'pinia'
 import { Channel, invoke } from '@tauri-apps/api/core'
+import { conversationSettings } from '../../shared/conversation-settings'
 import { isDesktop } from '../../shared/desktop'
 import { useSettingsStore } from '../settings/store'
 import { useWorkspaceStore } from '../workspace/store'
@@ -348,7 +349,10 @@ export const useChatStore = defineStore('chat', () => {
     )
       return false
     const signature = [model, targetLanguage, nativeLanguage, mode].join('|')
-    if (lane.signature && lane.signature !== signature) {
+    if (
+      lane.signature &&
+      conversationSettings(lane.signature) !== conversationSettings(signature)
+    ) {
       const draft = lane.draft
       await reset(pane)
       if (lane.signature) return false

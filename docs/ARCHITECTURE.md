@@ -1,88 +1,62 @@
-# Parley 架构设计
+# Parley 当前架构
 
-## 当前实现与目标架构
+Parley 有两个入口：Vue/Tauri 桌面工作台和纯浏览器 Web。桌面通过 Rust 连接 API、Codex App Server 或 Claude Code；Web 只连接 API。两个入口都有独立的主聊和语言助手，学习数据留在各自设备。
 
-当前已实现 Vue 工作台、Rust Codex stdio 客户端、官方登录、两个独立流式对话、SQLite 工作区存储和 Codex thread 恢复；词句收藏、备份和离线复习也已实现，见 [词句实现记录](VOCABULARY_IMPLEMENTATION.md)。工作区存储见 [持久化说明](PERSISTENCE.md)，具体接入与限制见 [Codex 接入说明](CODEX_INTEGRATION.md)。
+## 代码从哪里读起
 
-下文保留早期 Codex 架构设计，数据库以实际 SQL 迁移为准。下一阶段的通用会话层、API 与双 CLI 适配、数据迁移详见 [多模型后端开发计划](MULTI_BACKEND_PLAN.md)；开发进度见 [实现记录](MULTI_BACKEND_IMPLEMENTATION.md)。
+| 目录                                        | 职责                                                             |
+| ------------------------------------------- | ---------------------------------------------------------------- |
+| `src/features/chat`                         | 桌面会话协调、消息展示、轮次事件过滤                             |
+| `src/features/workspace`                    | 当前面板、草稿、偏好和历史导航，控制保存与关闭顺序               |
+| `src/features/backends`                     | 服务配置、模型列表、凭据状态和后端切换                           |
+| `src/features/codex`                        | Codex 的连接、账号与模型能力；旧 store 导出保留兼容性            |
+| `src/features/vocabulary`                   | 桌面词句编辑、来源、检索、回收站和离线复习                       |
+| `src/shared`                                | 两端共用的任务提示、字段校验、会话设置规则，以及桌面通用 UI 工具 |
+| `src/web/store.ts`                          | Web 的会话和模型操作，对组件提供业务入口                         |
+| `src/web/learning.ts`                       | Web 的词句校验、去重、删除和复习操作                             |
+| `src/web/persistence.ts`                    | 记录修改集合、合并保存、失败重试和持久化确认                     |
+| `src/web/storage.ts`                        | IndexedDB 分记录读写、事务和旧版本迁移                           |
+| `src/web/validation.ts` / `backup.ts`       | 数据边界校验、旧 JSON 与逐行备份格式                             |
+| `src-tauri/src/backends`                    | API/Claude 适配、凭据、HTTP/SSE、请求生命周期                    |
+| `src-tauri/src/codex`                       | Codex 连接注册、流式事件和轮次控制                               |
+| `src-tauri/src/chat`                        | 各桌面适配器共用的持久化轮次与发布事件                           |
+| `src-tauri/src/storage`                     | Diesel 查询、SQLite 事务、词句与会话存储                         |
+| `src-tauri/src/launcher.rs` / `terminal.rs` | 官方 CLI 启动、终端上下文和伴随 GUI                              |
+| `fixtures` / `tests/e2e`                    | 共用错误分类，以及本地服务驱动的浏览器回归；不进入产品构建       |
 
-```text
-Vue / Pinia
-  主会话 | 语言助手 | 生词本 | 设置
-              │ 受限 Tauri commands / typed events
-Rust application layer
-  会话协调 | Codex adapter | 学习数据 repository
-              │                  │
-  官方 codex app-server         SQLite（本地）
-  stdio / JSON-RPC              版本迁移、备份、导出
-              │
-  用户自己的 ChatGPT 登录与 Codex 额度
-```
+## 一次桌面提问
 
-前端负责呈现与输入；Rust 负责生命周期、协议路由和数据一致性。模型输出是展示数据，不是可执行指令。
+1. 主聊或助手组件调用 `useChatStore().send()`。store 固定当前会话、服务版本、模型、任务和引用来源，并先保存草稿。
+2. `backend_send` 校验服务绑定与认证作用域，创建稳定的本地用户/助手消息 ID。已停用配置、错误版本或未停止的请求不能开始新轮次。
+3. Rust 按后端选择 Codex、Claude Code 或 HTTP 适配。API 从成功轮次重建上下文；Codex 使用用户自己的 CLI 和 thread；Claude GUI 使用其受限 headless 接口。
+4. 流式结果交给 `chat::Publisher`。先在 SQLite 中保存投影，再向 Vue 发布带配置版本、会话、请求和序号的事件。
+5. 前端只接收当前轮次的递增事件；停止、失败和正常完成分别记录。关闭工作区时等待保存与取消，失败时保留重试入口。
 
-## Codex 适配边界
+“怎么说／解释／翻译”是每轮任务。切换任务保留会话；更换模型或语言仍建立新的会话边界。已有签名兼容此规则，无需清空历史。Codex 的基础指令描述通用辅导职责，每轮输入单独声明当前任务。
 
-使用官方 App Server 扩展点，不复制网页登录 Cookie，不直接逆向订阅推理端点。初期使用用户安装的 CLI；将来是否打包官方二进制，需要单独确认分发、许可和升级策略。
+## 一次 Web 提问或词句保存
 
-接入流程：
+Web 的网络请求由浏览器直接发送，API Key 只留在当前标签页内存。组件通过 store/learning 方法修改词句，不自行实现去重或复习排程。
 
-1. Rust 解析可执行文件路径并使用参数数组启动进程，不拼接 shell 命令。
-2. `initialize` 指明 `parley` 客户端身份，收到结果后发送 `initialized`。
-3. 查询账号；必要时执行官方 `account/login/start` 流程。
-4. 分页读取 `model/list`，提供主模型与辅导模型选择。
-5. 创建或恢复两个独立持久 thread；从 `turn/start` 到 `turn/completed` 按 ID 路由。
-6. 在 Rust 中将协议事件转换为应用事件；Vue 不依赖完整上游协议。
-7. 退出时取消活动工作并回收子进程；崩溃后提示恢复，不自动重放用户输入。
+草稿、设置采用小范围监听，词条与流式消息由业务操作显式标记修改。`persistence` 合并这些记录，`storage` 在一个事务中写入对应的 IndexedDB object stores；输入草稿不会序列化词库。新建/删除时才更新目录顺序。当前词句列表每页展示 50 条。
 
-协议的具体字段应以实际支持版本生成的 schema 为准。优先使用稳定能力；需要实验字段时必须在兼容文档中标明并覆盖降级行为。
+IndexedDB v2 使用 `workspace`、`profiles`、`conversations`、`messages`、`words`。旧 v1 快照先校验，再在完整事务中迁移；迁移保留原快照。Web Locks 控制标签页编辑权，存储版本号防止没有 Web Locks 时的陈旧覆盖。
 
-对话所需工具能力应最小化：不应因为底层是编码智能体，就让语言学习自动获得任意文件读写和命令执行。M1 实测官方支持的禁用/隔离配置；应用工作目录使用专用目录，不继承用户当前代码仓库。保留凭据兼容性的同时避免无意继承全局插件和指令，具体覆盖方式需按 CLI 版本验证。
+明确的“保存词句”会等待写入成功。恢复备份先提交完整替换，再切换内存工作区和清除密钥；失败时保留原数据和预览。已有过长标签可以先导出原始数据，再进行局部修复。
 
-## 双会话与上下文
+## 数据和备份边界
 
-`LearningSession` 关联一个主 `threadId`；辅导会话关联自己的 `threadId`。事件统一携带 `sessionId`、`channel`、`threadId`、`turnId`、`itemId`，防止两区串流。连接状态、认证状态和每个 turn 的状态分别维护。
+桌面 SQLite schema 由 SQL 迁移和 Diesel schema 定义。迁移前备份、事务、记录版本及来源快照负责保护数据。PRAGMA、VACUUM 和迁移脚本保留必要的 SQL；普通业务查询走 Diesel。
 
-主对话 prompt 包含目标语言、学习水平、回答风格和纠错偏好。辅导 prompt 包含母语、目标语言和请求类型。prompt 文件未来放入 `src-tauri/prompts/`，版本号随请求元数据记录。
+Web 新备份使用 `.jsonl`：元数据、服务、会话、消息、词句分别成行，以带记录计数的结束行检测截断；导入逐行读取。旧 `.json` 仍可导入，不再采用不对称的 32 MiB 总量限制。两种备份都校验字段和记录数量，排除密钥与协议私有续聊数据。
 
-辅导请求使用结构化上下文：选中文字、所在原句、来源消息 ID、前后少量消息和用户问题。选中文本作为引用材料处理，不作为更高优先级指令。避免默认复制完整主对话，减少重复上下文和额度消耗。
+桌面和 Web 的完整备份格式仍有区别：桌面包含多个来源、多义词条、双向复习等信息。共用字段规则不代表两个文件格式可以互换；跨端迁移需显式定义这些信息的映射，不能直接把桌面 JSON 当 Web 备份打开。
 
-原始 Codex thread 是上游运行记录；本地消息表保存用户可见投影和学习引用。使用唯一上游 item ID 更新投影，避免重连后重复追加。只把已确认完成的状态当作完成，崩溃中的消息标为 interrupted。
+## 测试与发布
 
-## 早期计划数据模型（M3，非当前数据库结构）
+- Vitest 检查 store、校验、备份和 IndexedDB 事务；Rust 检查协议、存储和进程生命周期。
+- `npm run test:web` 构建真实 Web 产物，再用 Playwright 和本地 HTTP/SSE 服务检查保存刷新、导入失败、任务切换、输入法合成事件、旧数据恢复和分页。没有真实模型请求。
+- 三平台 CI 执行构建和静态检查。Pages 只允许 `main` 部署，PR 运行浏览器回归。
+- Linux 安装包必须通过 `finalize-deb` 与 `check-deb`，使用独立包名和文件路径，避免覆盖 KDE Parley。原生运行与真实服务验收范围见[兼容记录](BACKEND_COMPATIBILITY.md)。
 
-| 表                       | 关键字段                                                                       | 关系/约束                                |
-| ------------------------ | ------------------------------------------------------------------------------ | ---------------------------------------- |
-| `settings`               | key, value_json, updated_at                                                    | 语言、主题、模型偏好；不存凭据           |
-| `learning_sessions`      | id, title, native_language, target_language, level, created_at                 | 语言标识支持 BCP 47                      |
-| `conversations`          | id, session_id, channel, codex_thread_id, model_id, prompt_version             | channel 为 main/tutor，thread 映射独立   |
-| `messages`               | id, conversation_id, upstream_item_id, turn_id, role, text, status, created_at | 上游 item 标识幂等；未完成消息明确标记   |
-| `tutor_requests`         | id, conversation_id, source_message_id, selected_text, context_snapshot, kind  | 来源可空，保留上下文快照                 |
-| `vocabulary_entries`     | id, language, text, lookup_key, meaning, note, mastery, created_at             | 原始拼写不破坏；归一化仅用于查询         |
-| `vocabulary_occurrences` | id, entry_id, source_message_id, sentence_snapshot, selection_metadata         | 同一词句可有多个语境；会话删除可保留快照 |
-
-所有写入通过 Rust repository 和事务。正式表结构已经建立，见 `src-tauri/migrations/`；上表仅保留初期设计背景。
-
-选择区间需明确字符偏移单位，不能混用 JavaScript UTF-16 与 Rust UTF-8 字节索引。首版保存原句与选中字符串；精确定位同时记录经验证的偏移和原文哈希，文本变化时回退到快照。
-
-数据文件位于 Tauri 提供的 app data directory。支持用户显式备份、导出和删除；Codex 自身的认证/历史记录位置需在数据说明中另列，删除 Parley 数据不等于删除 Codex 数据。
-
-## Tauri 权限与通信
-
-当前注册运行信息及明确的 Codex 连接、登录、发送、停止和重置命令，通过 AppManifest 生成权限，并只授予 `main` 窗口。流式事件使用 Tauri IPC Channel；不暴露任意 JSON-RPC 转发。生产 CSP 仅加载本地资源；开发 CSP 额外允许 Vite 样式注入和本地 HMR WebSocket。
-
-后续新增命令使用明确 DTO，例如 `start_conversation`、`ask_tutor`、`save_vocabulary`；不暴露“执行任意命令”“读取任意文件”之类通用接口。数据库操作和 Codex 凭据不直接交给 WebView。外部链接通过受控打开方式处理，Markdown 不允许原始 HTML 或任意协议链接。
-
-## 文档依据与待验证项
-
-以下官方文档在本次初始化时核对；在线内容会更新，应在 M1 选定 CLI 版本后记录兼容矩阵。
-
-- [Codex App Server](https://learn.chatgpt.com/docs/app-server)：产品集成、握手、thread/turn、模型查询与认证流程。
-- [Codex Authentication](https://learn.chatgpt.com/docs/auth)：ChatGPT 登录与 API Key 两种认证方式。
-- [Codex Pricing](https://learn.chatgpt.com/docs/pricing)：订阅使用限制和模型额度；主/辅调用均消耗额度。
-- [OpenAI Terms of Use](https://openai.com/policies/row-terms-of-use/)：用户账号、服务访问和使用约束。
-- [Tauri + Vite](https://v2.tauri.app/start/frontend/vite/)：构建目录、开发服务配置。
-- [Tauri Capabilities](https://v2.tauri.app/security/capabilities/)：窗口权限和应用命令白名单。
-- [Vue Quick Start](https://vuejs.org/guide/quick-start)：Vue/TypeScript/Vite 开发基础。
-
-官方支持 App Server 产品集成和 ChatGPT 登录是已确认事实；“Parley 的全部具体使用方式符合所有适用条款”不是这些技术文档单独能证明的结论。当前已在 Linux 验证配置覆盖与两会话并发。凭据沿用本机 Codex 官方存储；全新账号浏览器授权及其他平台仍需人工实测。
+[早期设计](archive/ARCHITECTURE_EARLY.md)保留决策背景。[多后端实现记录](MULTI_BACKEND_IMPLEMENTATION.md)用于查阅历史验证过程，不作为当前模块职责的入口。

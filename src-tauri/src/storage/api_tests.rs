@@ -258,3 +258,30 @@ fn usage_reopens_with_only_its_own_assistant_even_when_upstream_ids_match() {
     }
     assert!(s.read("legacy").unwrap().messages.is_empty());
 }
+
+#[test]
+fn tutor_task_changes_keep_history_but_model_changes_remain_a_boundary() {
+    let storage = Storage::memory();
+    let mut first = turn(&storage, "tutor", "tutor");
+    first.mode = "explain".into();
+    first.signature = "fixture-model|en|zh-CN|explain".into();
+    storage.begin_turn(&first).unwrap();
+    storage
+        .update_turn(&first, 1, "Previous explanation", "complete", None, None)
+        .unwrap();
+    let mut follow = next(&first);
+    follow.mode = "translate".into();
+    follow.signature = "fixture-model|en|zh-CN|translate".into();
+    storage.begin_turn(&follow).unwrap();
+    assert_eq!(
+        storage.api_history("tutor").unwrap()[0].1,
+        "Previous explanation"
+    );
+    storage
+        .update_turn(&follow, 1, "Translation", "complete", None, None)
+        .unwrap();
+    let mut other = next(&follow);
+    other.signature = "another-model|en|zh-CN|translate".into();
+    assert!(storage.begin_turn(&other).is_err());
+    assert_eq!(storage.read("tutor").unwrap().messages.len(), 4);
+}

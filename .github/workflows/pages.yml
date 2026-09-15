@@ -2,7 +2,7 @@ name: Web and GitHub Pages
 
 on:
   push:
-    branches: [main, validation/multi-backend-alpha]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -25,14 +25,15 @@ jobs:
       - run: npm ci
       - run: npm run format:check
       - run: npm test
-      - run: npm run web:build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:web
       - uses: actions/upload-pages-artifact@v4
-        if: github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         with:
           path: dist-web
 
   deploy:
-    if: github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     needs: build
     permissions:

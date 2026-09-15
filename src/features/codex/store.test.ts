@@ -933,3 +933,26 @@ describe('multiple Codex profiles', () => {
     expect(connection.error).toBe('')
   })
 })
+
+it('keeps the current tutor conversation when changing explain to translate', async () => {
+  const store = useCodexStore()
+  await store.connect()
+  const lane = store.lanes.tutor,
+    id = lane.id
+  lane.signature = [store.tutorModel, 'en', 'zh-CN', 'explain'].join('|')
+  lane.messages.push({
+    id: 'previous',
+    role: 'assistant',
+    text: 'Previous explanation',
+    status: 'complete',
+  })
+  store.tutorMode = 'translate'
+  expect(await store.send('tutor', '翻译一下刚才那句话', 'translate')).toBe(true)
+  expect(lane.id).toBe(id)
+  expect(lane.messages[0]?.text).toBe('Previous explanation')
+  expect(
+    mock.invoke.mock.calls.some(
+      ([method]) => method === 'codex_reset' || method === 'storage_create',
+    ),
+  ).toBe(false)
+})

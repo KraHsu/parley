@@ -4,6 +4,7 @@ import ChatPane from './ChatPane.vue'
 import SettingsDialog from './SettingsDialog.vue'
 import WordDialog from './WordDialog.vue'
 import WordsPanel from './WordsPanel.vue'
+import { readBackup as parseBackupFile } from './backup'
 import { createWebWorkspace } from './store'
 import type { WebState, Word } from './types'
 import './web.css'
@@ -42,8 +43,7 @@ async function readBackup(event: Event) {
     selected = input.files?.[0]
   if (!selected) return
   try {
-    if (selected.size > 32 * 1024 * 1024) throw new Error('备份不能超过 32 MiB。')
-    backup.value = w.parseBackup(await selected.text())
+    backup.value = await parseBackupFile(selected)
     restoreDialog.value?.showModal()
   } catch (e) {
     w.error = e instanceof Error ? e.message : String(e)
@@ -51,7 +51,7 @@ async function readBackup(event: Event) {
   input.value = ''
 }
 async function restore() {
-  if (backup.value) await w.restore(backup.value)
+  if (!backup.value || !(await w.restore(backup.value))) return
   backup.value = undefined
   restoreDialog.value?.close()
 }
@@ -104,7 +104,10 @@ function explain(word: Word) {
           <summary>备份</summary>
           <div>
             <button :disabled="!w.initialized" @click="w.download">导出 Web 备份</button
-            ><button :disabled="!w.canEdit || w.busy.main || w.busy.tutor" @click="file?.click()">
+            ><button
+              :disabled="w.readonly || w.restoring || w.busy.main || w.busy.tutor"
+              @click="file?.click()"
+            >
               导入 Web 备份
             </button>
           </div>
@@ -112,8 +115,16 @@ function explain(word: Word) {
       </div>
     </header>
     <div v-if="w.storageError" class="web-banner danger" role="alert">
-      {{ w.storageError }}<button @click="w.persist">重试保存</button
-      ><button v-if="w.initialized" @click="w.download">导出当前数据</button>
+      {{ w.storageError
+      }}<template v-if="w.initialized"
+        ><button @click="w.persist">重试保存</button
+        ><button @click="w.download">导出当前数据</button></template
+      >
+      <template v-else
+        ><button @click="w.downloadRaw">导出原始数据</button
+        ><button :disabled="w.readonly || w.restoring" @click="w.repairTags">修复过长标签</button
+        ><button @click="file?.click()">从备份恢复</button></template
+      >
     </div>
     <div v-if="w.error" class="web-banner danger" role="alert">
       {{ w.error }}<button aria-label="关闭错误提示" @click="w.error = ''">×</button>
@@ -164,14 +175,21 @@ function explain(word: Word) {
       ref="file"
       class="visually-hidden"
       type="file"
-      accept="application/json,.json"
+      accept="application/json,application/x-ndjson,.json,.jsonl"
       aria-label="导入 Web 备份文件"
       @change="readBackup"
     />
-    <dialog ref="restoreDialog" class="web-dialog">
+    <dialog
+      ref="restoreDialog"
+      class="web-dialog"
+      aria-labelledby="web-restore-title"
+      @cancel="w.restoring && $event.preventDefault()"
+    >
       <header>
-        <h2>恢复 Web 备份</h2>
-        <button aria-label="取消恢复" @click="restoreDialog?.close()">×</button>
+        <h2 id="web-restore-title">恢复 Web 备份</h2>
+        <button :disabled="w.restoring" aria-label="取消恢复" @click="restoreDialog?.close()">
+          ×
+        </button>
       </header>
       <div v-if="backup" class="dialog-body">
         <p>
@@ -179,13 +197,16 @@ function explain(word: Word) {
           {{ backup.profiles.length }} 个 API 配置。
         </p>
         <p>确认后将替换当前浏览器中的学习数据。可以先导出当前数据；密钥不会从备份恢复。</p>
-        <button @click="w.download">先导出当前数据</button>
+        <button v-if="w.initialized" @click="w.download">先导出当前数据</button>
+        <p v-if="w.error || w.storageError" class="web-error" role="alert">
+          {{ w.error || w.storageError }}
+        </p>
       </div>
       <footer>
-        <button @click="restoreDialog?.close()">取消</button
+        <button :disabled="w.restoring" @click="restoreDialog?.close()">取消</button
         ><button
           class="primary"
-          :disabled="!w.canEdit || w.busy.main || w.busy.tutor"
+          :disabled="w.readonly || w.restoring || w.busy.main || w.busy.tutor"
           @click="restore"
         >
           确认恢复

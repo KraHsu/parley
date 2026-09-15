@@ -156,7 +156,9 @@ impl Storage {
                 .find(&turn.conversation_id)
                 .select((c::signature, c::pane, c::title))
                 .first::<(String, String, String)>(db)?;
-            if !signature.is_empty() && signature != turn.signature {
+            if !signature.is_empty()
+                && !crate::chat::same_conversation_settings(&signature, &turn.signature)
+            {
                 return Err("模型或语言设置已改变，请新建对话。".into());
             }
             let busy = diesel::select(diesel::dsl::exists(

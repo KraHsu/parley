@@ -16,7 +16,7 @@ const emit = defineEmits<{
   selection: [source: VocabularySource | null]
 }>()
 const vocabulary = useVocabularyStore()
-const codex = useChatStore()
+const chat = useChatStore()
 const body = ref<HTMLElement>()
 const selected = ref<VocabularySource | null>(null)
 const error = ref('')
@@ -102,10 +102,10 @@ async function ask(mode: 'explain' | 'translate') {
   if (!selected.value) whole()
   if (!selected.value) return
   const source = JSON.parse(JSON.stringify(selected.value))
-  codex.tutorMode = mode
+  chat.tutorMode = mode
   vocabulary.tutorFocusRequest++
-  codex.mobilePane = 'tutor'
-  await codex.send(
+  chat.mobilePane = 'tutor'
+  await chat.send(
     'tutor',
     `${mode === 'translate' ? '请翻译' : '请解释词义和语法'}下面的学习材料，优先关注选中词句：\n${JSON.stringify({ language: displayedLanguage.value, selected: source.selectedText, sentence: source.snapshot })}`,
     mode,
@@ -153,14 +153,14 @@ function useAnswer(field: 'meaning' | 'note') {
       <template v-if="selected">
         <button
           class="text-button"
-          :disabled="!codex.isReady('tutor') || codex.lanes.tutor.busy"
+          :disabled="!chat.isReady('tutor') || chat.lanes.tutor.busy"
           @click="ask('explain')"
         >
           解释
         </button>
         <button
           class="text-button"
-          :disabled="!codex.isReady('tutor') || codex.lanes.tutor.busy"
+          :disabled="!chat.isReady('tutor') || chat.lanes.tutor.busy"
           @click="ask('translate')"
         >
           翻译

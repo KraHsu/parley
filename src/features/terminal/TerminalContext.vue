@@ -14,14 +14,14 @@ import {
   type TerminalMessage,
 } from './context'
 const props = defineProps<{ startedAt: number; backend?: 'codex' | 'claude-code' }>()
-const codex = useChatStore()
+const chat = useChatStore()
 const settings = useSettingsStore()
 const backends = useBackendStore()
-const sourceReady = computed(() => props.backend === 'claude-code' || codex.connected)
+const sourceReady = computed(() => props.backend === 'claude-code' || chat.connected)
 const sourceName = computed(() => (props.backend === 'claude-code' ? 'Claude Code' : 'Codex'))
 const assistantName = computed(
   () =>
-    backends.profiles.find((p) => p.id === codex.lanes.tutor.backend.profileId)?.config.name ??
+    backends.profiles.find((p) => p.id === chat.lanes.tutor.backend.profileId)?.config.name ??
     '所选助手服务',
 )
 const notice = ref('')
@@ -74,12 +74,12 @@ async function refresh() {
       const previous = latest.value?.id
       messages.value = result.messages
       if (latest.value?.id !== previous) selection.value = ''
-      codex.terminalContext = studyContext(messages.value, selection.value)
+      chat.terminalContext = studyContext(messages.value, selection.value)
     }
   } catch (e) {
     if (current === generation && !disposed) {
       error.value = String(e)
-      codex.terminalContext = ''
+      chat.terminalContext = ''
     }
   } finally {
     if (current === generation) {
@@ -95,7 +95,7 @@ watch(
     messageId.value = ''
     frozen.value = false
     messages.value = []
-    codex.terminalContext = ''
+    chat.terminalContext = ''
     void refresh()
   },
   { flush: 'sync' },
@@ -103,7 +103,7 @@ watch(
 watch(messageId, () => {
   selection.value = ''
   frozen.value = false
-  codex.terminalContext = studyContext(latest.value ? [latest.value] : messages.value)
+  chat.terminalContext = studyContext(latest.value ? [latest.value] : messages.value)
 })
 watch(
   () => sourceReady.value,
@@ -113,22 +113,22 @@ watch(
     if (connected) void refresh()
     else {
       reading.value = false
-      codex.terminalContext = ''
+      chat.terminalContext = ''
     }
   },
   { immediate: true },
 )
 function selectedPassage(source: VocabularySource | null) {
   selection.value = source?.selectedText ?? ''
-  codex.terminalContext = studyContext(messages.value, selection.value)
+  chat.terminalContext = studyContext(messages.value, selection.value)
 }
 async function ask(mode: 'explain' | 'translate') {
-  codex.tutorMode = mode
-  codex.terminalContext = studyContext(
+  chat.tutorMode = mode
+  chat.terminalContext = studyContext(
     latest.value ? [latest.value] : messages.value,
     selection.value,
   )
-  await codex.send(
+  await chat.send(
     'tutor',
     mode === 'translate'
       ? '请翻译当前终端内容；若有选中片段，优先翻译选中部分。'
@@ -140,7 +140,7 @@ onUnmounted(() => {
   disposed = true
   generation++
   clearTimeout(timer)
-  codex.terminalContext = ''
+  chat.terminalContext = ''
 })
 </script>
 <template>
@@ -160,7 +160,7 @@ onUnmounted(() => {
     </p>
     <p v-if="notice" class="settings-help" role="status">{{ notice }}</p>
     <p class="settings-help">
-      解释或翻译将发送到 {{ assistantName }}（{{ codex.tutorModel || '待选择模型' }}）。
+      解释或翻译将发送到 {{ assistantName }}（{{ chat.tutorModel || '待选择模型' }}）。
     </p>
     <details v-if="latest">
       <summary>{{ selection ? '已选中片段 · 查看终端内容' : '查看终端最近消息' }}</summary>
@@ -193,13 +193,13 @@ onUnmounted(() => {
     <div class="terminal-context-actions">
       <button
         class="secondary-button"
-        :disabled="!codex.isReady('tutor') || !codex.terminalContext || codex.lanes.tutor.busy"
+        :disabled="!chat.isReady('tutor') || !chat.terminalContext || chat.lanes.tutor.busy"
         @click="ask('explain')"
       >
         解释{{ selection ? '选中片段' : '当前回复' }}</button
       ><button
         class="secondary-button"
-        :disabled="!codex.isReady('tutor') || !codex.terminalContext || codex.lanes.tutor.busy"
+        :disabled="!chat.isReady('tutor') || !chat.terminalContext || chat.lanes.tutor.busy"
         @click="ask('translate')"
       >
         翻译</button

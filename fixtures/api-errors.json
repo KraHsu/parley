@@ -1,0 +1,13 @@
+{
+  "invalid_api_key": ["credentials", "API Key 无效，请重新填写。"],
+  "authentication_error": ["credentials", "认证失败，请检查 API Key 和访问权限。"],
+  "permission_denied": ["credentials", "当前凭据没有访问此模型的权限。"],
+  "insufficient_quota": ["quota", "服务额度不足，请检查余额或消费上限。"],
+  "rate_limit_exceeded": ["quota", "请求过于频繁，请稍后重试。"],
+  "rate_limit_error": ["quota", "请求过于频繁，请稍后重试。"],
+  "context_length_exceeded": ["request", "对话超出模型上下文长度，请减少引用或新建对话。"],
+  "model_not_found": ["request", "模型不存在或当前账号无权使用，请检查模型 ID。"],
+  "unsupported_parameter": ["request", "模型不支持当前请求参数，请检查模型与 API 协议是否匹配。"],
+  "invalid_request_error": ["request", "服务不接受当前请求，请检查模型 ID 与 API 协议。"],
+  "overloaded_error": ["service", "服务暂时繁忙，请稍后重试。"]
+}

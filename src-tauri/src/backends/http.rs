@@ -197,7 +197,7 @@ pub async fn models(
             .await
             .map_err(network_error)?;
         if !response.status().is_success() {
-            return Err(status_error(response.status().as_u16()));
+            return Err(response_error(response, credential.key.as_str()).await);
         }
         let body = bounded_body(response, 2 * 1024 * 1024).await?;
         let json: Value = serde_json::from_slice(&body).map_err(|_| "模型列表不是有效 JSON。")?;
@@ -286,6 +286,66 @@ fn status_error(status: u16) -> String {
         _ => "服务暂时无法完成请求",
     };
     format!("{message}（HTTP {status}）。")
+}
+
+async fn response_error(response: reqwest::Response, secret: &str) -> String {
+    let status = response.status().as_u16();
+    let request_id = response
+        .headers()
+        .get("x-request-id")
+        .or_else(|| response.headers().get("request-id"))
+        .and_then(|v| v.to_str().ok())
+        .filter(|id| {
+            !id.is_empty()
+                && id.len() <= 128
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                && (secret.is_empty() || !id.contains(secret))
+        })
+        .map(str::to_owned);
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(Ok(chunk)) = stream.next().await {
+        if bytes.len() + chunk.len() > 16384 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let catalog: Value = serde_json::from_str(include_str!("../../../fixtures/api-errors.json"))
+        .expect("embedded error catalog");
+    let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    let error = body.get("error").unwrap_or(&body);
+    let mut code = ["code", "type", "status"]
+        .into_iter()
+        .filter_map(|key| error[key].as_str())
+        .find(|key| catalog.get(key).is_some());
+    if code.is_none() || code == Some("invalid_request_error") {
+        let message = error["message"].as_str().unwrap_or_default().to_lowercase();
+        if message.contains("context") && (message.contains("length") || message.contains("window"))
+        {
+            code = Some("context_length_exceeded");
+        } else if message.contains("parameter")
+            && (message.contains("unsupported") || message.contains("not supported"))
+        {
+            code = Some("unsupported_parameter");
+        } else if message.contains("model")
+            && (message.contains("not found") || message.contains("does not exist"))
+        {
+            code = Some("model_not_found");
+        }
+    }
+    let mut message = match code {
+        Some(code) => format!(
+            "{}（HTTP {status} · {code}）",
+            catalog[code][1].as_str().unwrap_or_default()
+        ),
+        None => status_error(status),
+    };
+    if let Some(id) = request_id {
+        message.push_str(&format!(" 请求 {id}"));
+    }
+    message
 }
 
 #[derive(Default)]
@@ -420,7 +480,7 @@ where
     .await
     .map_err(network_error)?;
     if !response.status().is_success() {
-        return Err(status_error(response.status().as_u16()));
+        return Err(response_error(response, credential.key.as_str()).await);
     }
     if !response
         .headers()
@@ -610,5 +670,46 @@ mod tests {
         assert!(!out.complete);
         assert_eq!(updates.last().unwrap(), "你好 🌍");
         server.await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    #[tokio::test]
+    async fn error_catalog_is_used_without_disclosing_provider_messages() {
+        let catalog: Value =
+            serde_json::from_str(include_str!("../../../fixtures/api-errors.json")).unwrap();
+        for (code, detail) in catalog.as_object().unwrap() {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let body =
+                json!({"error":{"code":code,"message":"private learner prompt and fixture-key"}})
+                    .to_string();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut input = [0; 4096];
+                let mut headers = Vec::new();
+                while !headers.windows(4).any(|part| part == b"\r\n\r\n") {
+                    let n = socket.read(&mut input).await.unwrap();
+                    assert!(n > 0 && headers.len() + n <= 16384);
+                    headers.extend_from_slice(&input[..n]);
+                }
+                socket.write_all(format!("HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nx-request-id: req_fixture\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
+            });
+            let response = client()
+                .unwrap()
+                .get(format!("http://{address}"))
+                .send()
+                .await
+                .unwrap();
+            let message = response_error(response, "fixture-key").await;
+            assert!(message.contains(detail[1].as_str().unwrap()));
+            assert!(message.contains("req_fixture"));
+            assert!(!message.contains("private learner"));
+            assert!(!message.contains("fixture-key"));
+            server.await.unwrap();
+        }
     }
 }

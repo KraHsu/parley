@@ -116,3 +116,14 @@ impl Publisher {
         self.prepare(text, status, usage, continuation, error)()
     }
 }
+
+// Preserve pre-existing signatures while letting each tutor turn select its task.
+pub(crate) fn same_conversation_settings(a: &str, b: &str) -> bool {
+    fn identity(s: &str) -> &str {
+        match s.rsplit_once('|') {
+            Some((base, "conversation" | "express" | "explain" | "translate")) => base,
+            _ => s,
+        }
+    }
+    identity(a) == identity(b)
+}

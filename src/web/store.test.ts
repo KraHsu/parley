@@ -104,7 +104,7 @@ describe('web workspace routing', () => {
     expect(w.lane('main').target).toBe('fr')
     const c = w.lane('main')
     c.messages.push({ id: 'original', role: 'assistant', text: 'Bonjour', status: 'complete' })
-    w.saveWord({
+    await w.saveWord({
       id: 'word',
       text: 'Bonjour',
       language: 'fr',
@@ -132,4 +132,41 @@ describe('web workspace routing', () => {
     expect(w.keys.has('api')).toBe(false)
     w.dispose()
   })
+})
+
+it('keeps the current workspace and credentials when restoring cannot commit', async () => {
+  const w = await workspace()
+  await w.persist()
+  const original = JSON.parse(JSON.stringify(w.state))
+  const backup = initialState()
+  backup.settings.target = 'ja'
+  mocks.save.mockRejectedValue(new Error('disk full'))
+  expect(await w.restore(backup)).toBe(false)
+  expect(w.state).toEqual(original)
+  expect(w.keys.get('api')).toBe('private-key')
+  expect(w.notice).not.toContain('备份已恢复')
+  expect(w.error).toBe('disk full')
+  expect(w.canEdit).toBe(true)
+  w.dispose()
+})
+it('rejects an oversized tag before changing state and does not report success before a durable save', async () => {
+  const w = await workspace()
+  const word = {
+    id: 'word',
+    text: 'hello',
+    language: 'en',
+    meaning: '',
+    note: '',
+    tags: ['x'.repeat(101)],
+    source: null,
+    createdAt: 1,
+    review: null,
+  }
+  await expect(w.saveWord(word)).rejects.toThrow('100')
+  expect(w.state.words).toHaveLength(0)
+  word.tags = ['daily']
+  mocks.save.mockRejectedValue(new Error('disk full'))
+  await expect(w.saveWord(word)).rejects.toThrow('disk full')
+  expect(w.dirty).toBe(true)
+  w.dispose()
 })

@@ -2,22 +2,22 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { formatUsage } from '../chat/usage'
 import StudyText from '../vocabulary/StudyText.vue'
-import { useChatStore } from '../chat/store'
+import { useChatStore } from './store'
 import { useSettingsStore } from '../settings/store'
-import type { Message } from '../chat/store'
+import type { Message } from './store'
 const props = defineProps<{ messages: Message[]; busy: boolean; pane: 'main' | 'tutor' }>()
-const codex = useChatStore()
+const chat = useChatStore()
 const settings = useSettingsStore()
-const conversation = computed(() => codex.history.find((c) => c.id === codex.lanes[props.pane].id))
+const conversation = computed(() => chat.history.find((c) => c.id === chat.lanes[props.pane].id))
 const root = ref<HTMLElement>()
 const focusedMessage = computed(() => {
-  const focus = codex.sourceFocus
-  return focus?.pane === props.pane && focus.conversationId === codex.lanes[props.pane].id
+  const focus = chat.sourceFocus
+  return focus?.pane === props.pane && focus.conversationId === chat.lanes[props.pane].id
     ? focus.messageId
     : null
 })
 watch(
-  () => [codex.sourceFocus?.request, codex.lanes[props.pane].id],
+  () => [chat.sourceFocus?.request, chat.lanes[props.pane].id],
   async () => {
     const messageId = focusedMessage.value
     if (!messageId) return
@@ -65,7 +65,7 @@ watch(
         :answer-target="message.vocabularyTarget"
         :origin="{
           sourceKind: pane,
-          conversationId: codex.lanes[pane].id,
+          conversationId: chat.lanes[pane].id,
           messageId: message.id,
           threadId: conversation?.threadId ?? null,
           turnId: null,
@@ -78,7 +78,7 @@ watch(
       <small
         v-if="
           message.role === 'assistant' &&
-          (message.usage || (!busy && codex.lanes[pane].backend.kind !== 'codex'))
+          (message.usage || (!busy && chat.lanes[pane].backend.kind !== 'codex'))
         "
         class="message-usage"
         aria-label="服务返回的 token 用量"
@@ -90,8 +90,8 @@ watch(
         >{{ message.status === 'interrupted' ? '已中断 · 内容可能不完整' : '请求未完成' }}</small
       >
     </article>
-    <p v-if="codex.lanes[pane].notice" class="settings-help" role="status">
-      {{ codex.lanes[pane].notice }}
+    <p v-if="chat.lanes[pane].notice" class="settings-help" role="status">
+      {{ chat.lanes[pane].notice }}
     </p>
     <p v-if="busy" class="stream-status" role="status"><span class="tiny-dot" />正在回复…</p>
   </div>

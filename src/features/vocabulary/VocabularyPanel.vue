@@ -8,7 +8,7 @@ import VocabularyList from './VocabularyList.vue'
 import VocabularyDetail from './VocabularyDetail.vue'
 defineProps<{ companion?: boolean }>()
 const vocabulary = useVocabularyStore()
-const codex = useChatStore()
+const chat = useChatStore()
 const view = toRef(vocabulary, 'activeTab')
 watch(view, (tab) => {
   if (tab === 'words' && vocabulary.selected) void vocabulary.open(vocabulary.selected.id)
@@ -16,7 +16,7 @@ watch(view, (tab) => {
 </script>
 <template>
   <section
-    :inert="codex.closing"
+    :inert="chat.closing"
     class="vocabulary content-panel"
     aria-labelledby="vocabulary-title"
   >

@@ -5,7 +5,7 @@ import { useVocabularyStore } from './store'
 import { useChatStore } from '../chat/store'
 import type { ReviewCard, ReviewQueue, ReviewItem } from './types'
 const vocabulary = useVocabularyStore()
-const codex = useChatStore()
+const chat = useChatStore()
 const items = ref<ReviewItem[]>([])
 const stats = ref<ReviewQueue | null>(null)
 const limit = ref(20)
@@ -128,11 +128,11 @@ async function undo() {
   }
 }
 async function practice() {
-  if (!current.value || !codex.isReady('tutor') || codex.lanes.tutor.busy) return
+  if (!current.value || !chat.isReady('tutor') || chat.lanes.tutor.busy) return
   const fields = current.value.entry
   vocabulary.tutorFocusRequest++
-  codex.mobilePane = 'tutor'
-  await codex.send(
+  chat.mobilePane = 'tutor'
+  await chat.send(
     'tutor',
     `我想练习使用这个表达。请给一个简短情境，让我用它写一句话，再等我回答。\n${JSON.stringify({ language: fields.language, expression: fields.text, meaning: fields.meaning })}`,
     'express',
@@ -202,7 +202,7 @@ async function practice() {
         </div>
         <button
           class="text-button"
-          :disabled="!codex.isReady('tutor') || codex.lanes.tutor.busy"
+          :disabled="!chat.isReady('tutor') || chat.lanes.tutor.busy"
           @click="practice"
         >
           请助手给一个表达练习
