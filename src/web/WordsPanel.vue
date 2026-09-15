@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import type { WebWorkspace } from './store'
 import type { Word } from './types'
 const props = defineProps<{ w: WebWorkspace }>()
@@ -20,6 +20,15 @@ const words = computed(() =>
       .includes(search.value.toLocaleLowerCase()),
   ),
 )
+const page = ref(1)
+const pageCount = computed(() => Math.max(1, Math.ceil(words.value.length / 50)))
+const visibleWords = computed(() => words.value.slice((page.value - 1) * 50, page.value * 50))
+watch(search, () => {
+  page.value = 1
+})
+watch(pageCount, (count) => {
+  page.value = Math.min(page.value, count)
+})
 const due = computed(() =>
   props.w.state.words
     .filter((w) => w.review && w.review.dueAt <= now.value)
@@ -36,7 +45,7 @@ function showReview() {
 }
 function enroll(word: Word) {
   if (!props.w.canEdit) return
-  word.review = { stage: 0, dueAt: Date.now(), lastReviewedAt: null }
+  props.w.enroll(word.id)
   now.value = Date.now()
 }
 function add() {
@@ -97,31 +106,40 @@ function add() {
         <p>在词句卡片中添加复习，或稍后回来巩固。离线也可以复习。</p>
       </div>
     </div>
-    <div v-else class="word-grid">
-      <article v-for="word in words" :key="word.id" class="word-card">
-        <span class="eyebrow">{{ word.language }}</span>
-        <h2>{{ word.text }}</h2>
-        <p>{{ word.meaning || '等待你的理解与注释。' }}</p>
-        <p v-if="word.note" class="word-note">{{ word.note }}</p>
-        <div class="tags">
-          <span v-for="tag in word.tags" :key="tag">{{ tag }}</span>
+    <template v-else
+      ><nav v-if="pageCount > 1" class="message-actions" aria-label="词句分页">
+        <button :disabled="page === 1" @click="page--">上一页</button>
+        <span>第 {{ page }} / {{ pageCount }} 页 · {{ words.length }} 个词句</span>
+        <button :disabled="page === pageCount" @click="page++">下一页</button>
+      </nav>
+      <div class="word-grid">
+        <article v-for="word in visibleWords" :key="word.id" class="word-card">
+          <span class="eyebrow">{{ word.language }}</span>
+          <h2>{{ word.text }}</h2>
+          <p>{{ word.meaning || '等待你的理解与注释。' }}</p>
+          <p v-if="word.note" class="word-note">{{ word.note }}</p>
+          <div class="tags">
+            <span v-for="tag in word.tags" :key="tag">{{ tag }}</span>
+          </div>
+          <blockquote v-if="word.source">
+            {{ word.source.text
+            }}<small>{{ word.source.provider }} · {{ word.source.model }}</small>
+          </blockquote>
+          <div class="message-actions">
+            <button :disabled="!w.canEdit" @click="emit('edit', word)">编辑</button
+            ><button v-if="word.source" @click="emit('source', word)">查看来源</button
+            ><button :disabled="!w.ready('tutor')" @click="emit('explain', word)">请助手解释</button
+            ><button v-if="!word.review" :disabled="!w.canEdit" @click="enroll(word)">
+              加入复习</button
+            ><small v-else>下次复习 {{ new Date(word.review.dueAt).toLocaleDateString() }}</small>
+          </div>
+        </article>
+        <div v-if="!words.length" class="empty-chat">
+          <span>词</span>
+          <h2>{{ search ? '还没有匹配的词句。' : '让每一次对话留下收获。' }}</h2>
+          <p>选中对话里的词句收藏，添加你自己的理解。</p>
         </div>
-        <blockquote v-if="word.source">
-          {{ word.source.text }}<small>{{ word.source.provider }} · {{ word.source.model }}</small>
-        </blockquote>
-        <div class="message-actions">
-          <button :disabled="!w.canEdit" @click="emit('edit', word)">编辑</button
-          ><button v-if="word.source" @click="emit('source', word)">查看来源</button
-          ><button :disabled="!w.ready('tutor')" @click="emit('explain', word)">请助手解释</button
-          ><button v-if="!word.review" :disabled="!w.canEdit" @click="enroll(word)">加入复习</button
-          ><small v-else>下次复习 {{ new Date(word.review.dueAt).toLocaleDateString() }}</small>
-        </div>
-      </article>
-      <div v-if="!words.length" class="empty-chat">
-        <span>词</span>
-        <h2>{{ search ? '还没有匹配的词句。' : '让每一次对话留下收获。' }}</h2>
-        <p>选中对话里的词句收藏，添加你自己的理解。</p>
-      </div>
-    </div>
+      </div></template
+    >
   </section>
 </template>

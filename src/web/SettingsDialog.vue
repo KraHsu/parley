@@ -8,14 +8,17 @@ const dialog = ref<HTMLDialogElement>(),
   name = ref('OpenAI API'),
   url = ref(apiPresets[0]!.config.endpoint),
   key = ref(''),
-  error = ref('')
+  error = ref(''),
+  saving = ref(false)
 function choose() {
   const p = apiPresets[preset.value]!.config
   name.value = p.name
   url.value = p.endpoint
   key.value = ''
 }
-function save() {
+async function save() {
+  if (saving.value) return
+  saving.value = true
   try {
     const p = apiPresets[preset.value]!.config
     props.w.saveProfile(
@@ -28,21 +31,24 @@ function save() {
       },
       key.value,
     )
+    if (!(await props.w.persist())) throw new Error(props.w.storageError)
     key.value = ''
     error.value = ''
     props.w.notice = '服务已添加。请为两个面板分别选择模型。'
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    saving.value = false
   }
 }
 defineExpose({ show: () => dialog.value?.showModal() })
 </script>
 <template>
-  <dialog ref="dialog" class="web-dialog settings-dialog">
+  <dialog ref="dialog" class="web-dialog settings-dialog" aria-labelledby="web-settings-title">
     <header>
       <div>
         <span class="eyebrow">MAKE IT YOURS</span>
-        <h2>语言与 API 设置</h2>
+        <h2 id="web-settings-title">语言与 API 设置</h2>
       </div>
       <button aria-label="关闭设置" @click="dialog?.close()">×</button>
     </header>
@@ -104,7 +110,7 @@ defineExpose({ show: () => dialog.value?.showModal() })
           已读取 {{ w.models.get(profile.id)?.length }} 个模型，在对话面板中选择。
         </p>
       </section>
-      <form class="new-profile" @submit.prevent="save">
+      <form :inert="saving" class="new-profile" @submit.prevent="save">
         <h3>添加 API 服务</h3>
         <label
           >服务商<select v-model="preset" :disabled="!w.canEdit" @change="choose">
@@ -122,7 +128,7 @@ defineExpose({ show: () => dialog.value?.showModal() })
             placeholder="https://example.com/v1" /></label
         ><label>API Key<input v-model="key" type="password" autocomplete="off" /></label>
         <p v-if="error" class="web-error" role="alert">{{ error }}</p>
-        <button class="primary" :disabled="!w.canEdit">保存服务</button>
+        <button class="primary" :disabled="!w.canEdit || saving">保存服务</button>
       </form>
       <p v-if="w.error" class="web-error" role="alert">{{ w.error }}</p>
       <p class="help">

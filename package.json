@@ -1,6 +1,6 @@
 {
   "name": "parley",
-  "version": "0.4.0-alpha.1",
+  "version": "0.4.0-alpha.2",
   "private": true,
   "description": "A local-first language learning desktop client built with Vue and Tauri.",
   "type": "module",
@@ -28,7 +28,8 @@
     "package:linux": "tauri build --bundles deb -- --locked && node scripts/finalize-deb.mjs && node scripts/check-deb.mjs",
     "web:dev": "vite --mode web",
     "web:build": "vue-tsc --noEmit && vite build --mode web && node scripts/check-web-build.mjs",
-    "web:preview": "vite preview --mode web --host 127.0.0.1"
+    "web:preview": "vite preview --mode web --host 127.0.0.1",
+    "test:web": "npm run web:build && playwright test"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
@@ -36,9 +37,11 @@
     "vue": "3.5.42"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tauri-apps/cli": "2.11.4",
     "@types/node": "^24.0.0",
     "@vitejs/plugin-vue": "6.0.8",
+    "fake-indexeddb": "^6.2.5",
     "prettier": "3.9.6",
     "typescript": "5.9.3",
     "vite": "8.3.0",

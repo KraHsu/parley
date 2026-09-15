@@ -220,7 +220,7 @@ watch(
     </div>
     <form class="web-composer" @submit.prevent="w.send(pane, undefined, mode)">
       <label v-if="pane === 'tutor'" class="tutor-mode"
-        >任务<select v-model="mode">
+        >任务<select v-model="mode" aria-label="辅导任务">
           <option value="express">怎么说</option>
           <option value="explain">解释</option>
           <option value="translate">翻译</option>

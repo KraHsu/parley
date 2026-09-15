@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import MessageList from './features/codex/MessageList.vue'
+import MessageList from './features/chat/MessageList.vue'
 import TutorPanel from './features/tutor/TutorPanel.vue'
 import TerminalContext from './features/terminal/TerminalContext.vue'
 import VocabularyPanel from './features/vocabulary/VocabularyPanel.vue'

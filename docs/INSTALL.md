@@ -4,13 +4,13 @@
 
 ## 下载和安装
 
-旧版 `Parley_0.3.0_amd64.deb` 使用了与 Ubuntu KDE Parley 相同的包名，会被 APT 误升级；请勿继续安装旧包。本仓库已修复为 **`parley-desktop`**，当前修复包为 `ParleyDesktop_0.4.0-alpha.1_amd64.deb`（多后端预览版）。
+旧版 `Parley_0.3.0_amd64.deb` 使用了与 Ubuntu KDE Parley 相同的包名，会被 APT 误升级；请勿继续安装旧包。本仓库已修复为 **`parley-desktop`**，当前修复包为 `ParleyDesktop_0.4.0-alpha.2_amd64.deb`（多后端预览版）。
 
 以下适用于首次安装；已经装过旧版时，先按文末的修复流程迁移。
 
 ```bash
 sha256sum -c SHA256SUMS
-sudo apt install ./ParleyDesktop_0.4.0-alpha.1_amd64.deb
+sudo apt install ./ParleyDesktop_0.4.0-alpha.2_amd64.deb
 ```
 
 从 [GitHub Releases](https://github.com/KraHsu/parley/releases) 获取安装包前，请确认文件名为 `ParleyDesktop_…`；尚未发布的版本可按本文末尾步骤构建。
@@ -64,7 +64,7 @@ sudo apt remove parley-desktop
 
 ## 从源码构建安装包
 
-当前主分支版本为 `0.4.0-alpha.1`，包含尚未发布的多后端功能，使用方式见[模型服务设置](BACKENDS.md)。它会将旧工作区升级到 schema 7；运行前备份已有数据，旧版不能直接打开升级后的数据库。需要复现已发布的 v0.3.0 时，请使用对应 release tag，而不是当前主分支。
+当前主分支版本为 `0.4.0-alpha.2`，提供多后端预览功能，使用方式见[模型服务设置](BACKENDS.md)。它会将旧工作区升级到 schema 7；运行前备份已有数据，旧版不能直接打开升级后的数据库。需要复现已发布的 v0.3.0 时，请使用对应 release tag，而不是当前主分支。
 
 在配置好开发环境后执行：
 
@@ -75,7 +75,7 @@ npm run package:linux
 
 产物及对应 `SHA256SUMS` 位于 `target/release/bundle/deb/`，包含 `parley-desktop`、`parley-cli` 启动命令、应用菜单入口和安装文档。真实程序放在 `/usr/lib/parley-desktop/`，保留 CLI 与 GUI 的相邻路径；图标和文档使用独立名称。应用标识与学习数据目录不变。当前打包依赖下限针对 Ubuntu 24.04 构建环境；更换构建系统时应重新检查动态库依赖。
 
-开发包文件名为 `ParleyDesktop_0.4.0-alpha.1_amd64.deb`；Debian 包内版本使用 `0.4.0~alpha.1`，保证版本顺序为 `0.3.0 < 0.4.0~alpha.1 < 0.4.0`。`npm run package:linux` 会在 Tauri 打包后完成版本转换并生成校验文件。开发包尚未发布，真实厂商与其他平台的验收状态见兼容记录。
+开发包文件名为 `ParleyDesktop_0.4.0-alpha.2_amd64.deb`；Debian 包内版本使用 `0.4.0~alpha.2`，保证版本顺序为 `0.3.0 < 0.4.0~alpha.2 < 0.4.0`。`npm run package:linux` 会在 Tauri 打包后完成版本转换并生成校验文件。安装包以预发布形式提供；真实厂商与其他平台的验收状态见兼容记录。
 
 ## 修复旧包与 KDE Parley 的命名冲突
 
@@ -86,7 +86,7 @@ npm run package:linux
 先关闭 Parley 窗口，以普通桌面用户在项目目录执行（脚本会在需要时使用 sudo）：
 
 ```bash
-bash scripts/repair-installed-parley.sh "$PWD/target/release/bundle/deb/ParleyDesktop_0.4.0-alpha.1_amd64.deb"
+bash scripts/repair-installed-parley.sh "$PWD/target/release/bundle/deb/ParleyDesktop_0.4.0-alpha.2_amd64.deb"
 ```
 
 脚本会检查已安装的 `parley` 版本：如果仍是我们的旧 0.x 版本，在安装修复包的同一事务中用 `parley-` 显式移除旧包，避免 APT 误选 KDE 升级；如果已经是 KDE 版本，先运行 `sudo apt-get install -f` 完成被打断的系统事务，再安装修复包并检查 APT 状态。若本机已有本项目的 WebKit VBlank 启动器补丁，会备份并更新其可执行路径与图标，保留性能设置。它不会自动清理软件包、禁用源或删除学习记录。`apt-get -f` 用于修复损坏的依赖关系，详见 [Ubuntu APT 手册](https://manpages.ubuntu.com/manpages/noble/man8/apt-get.8.html)。

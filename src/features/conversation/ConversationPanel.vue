@@ -2,11 +2,11 @@
 import { ref, toRef } from 'vue'
 import { useSettingsStore } from '../settings/store'
 import AppIcon from '../../shared/AppIcon.vue'
-import MessageList from '../codex/MessageList.vue'
+import MessageList from '../chat/MessageList.vue'
 import ImportedContext from '../chat/ImportedContext.vue'
 import { useChatStore } from '../chat/store'
-const codex = useChatStore()
-const lane = codex.lanes.main
+const chat = useChatStore()
+const lane = chat.lanes.main
 import type { IconName } from '../../shared/AppIcon.vue'
 
 const settings = useSettingsStore()
@@ -74,9 +74,9 @@ function chooseTopic(index: number) {
   input.value?.focus()
 }
 async function send() {
-  if (!draft.value.trim() || lane.busy || !codex.isReady('main')) return
+  if (!draft.value.trim() || lane.busy || !chat.isReady('main')) return
   const text = draft.value
-  await codex.send('main', text)
+  await chat.send('main', text)
 }
 function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -95,8 +95,8 @@ function onKeydown(event: KeyboardEvent) {
       </h1>
       <button
         class="text-button"
-        :disabled="lane.busy || !codex.initialized || codex.navigating"
-        @click="codex.reset('main')"
+        :disabled="lane.busy || !chat.initialized || chat.navigating"
+        @click="chat.reset('main')"
       >
         新对话
       </button>
@@ -149,7 +149,7 @@ function onKeydown(event: KeyboardEvent) {
           id="conversation-input"
           ref="input"
           v-model="draft"
-          :disabled="!codex.initialized || codex.closing"
+          :disabled="!chat.initialized || chat.closing"
           @keydown="onKeydown"
           dir="auto"
           rows="2"
@@ -162,9 +162,9 @@ function onKeydown(event: KeyboardEvent) {
           >
           <button
             class="send-button"
-            :disabled="!lane.busy && (!codex.isReady('main') || !draft.trim() || !codex.mainModel)"
+            :disabled="!lane.busy && (!chat.isReady('main') || !draft.trim() || !chat.mainModel)"
             :aria-label="lane.busy ? '停止回复' : '发送消息'"
-            @click="lane.busy ? codex.stop('main') : send()"
+            @click="lane.busy ? chat.stop('main') : send()"
           >
             <AppIcon :name="lane.busy ? 'close' : 'arrow-up'" :size="19" />
           </button>
@@ -172,8 +172,7 @@ function onKeydown(event: KeyboardEvent) {
       </div>
       <p v-if="lane.error" class="inline-error" role="alert">{{ lane.error }}</p>
       <p id="conversation-status" class="composer-caption">
-        <span class="tiny-dot" />{{
-          codex.isReady('main') ? codex.mainModel : codex.paneLabel('main')
+        <span class="tiny-dot" />{{ chat.isReady('main') ? chat.mainModel : chat.paneLabel('main')
         }}<button @click="$emit('connect')">
           连接设置<AppIcon name="arrow-right" :size="12" />
         </button>

@@ -1,3 +1,4 @@
+import { parseTags } from '../../shared/learning-fields'
 import { defineStore } from 'pinia'
 import { reactive, ref, watch } from 'vue'
 import { wordInvoke as invoke } from '../../shared/word-operations'
@@ -309,10 +310,7 @@ export const useVocabularyStore = defineStore('vocabulary', () => {
           occurrence: draft.occurrence,
           draftId: draft.id,
           allowDuplicate: draft.allowDuplicate,
-          tags: draft.tagText
-            .split(/[,，]/)
-            .map((t) => t.trim())
-            .filter(Boolean),
+          tags: parseTags(draft.tagText, 20, 50),
         },
       })
       if (result.duplicate) {

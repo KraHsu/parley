@@ -1,0 +1,53 @@
+name: Linux release package
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check version tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node --input-type=module -e "import fs from 'node:fs'; import assert from 'node:assert/strict'; const v=JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json')).version; assert.equal(process.env.RELEASE_TAG, 'v'+v); assert.match(v, /^\d+\.\d+\.\d+(-[\w.]+)?$/)"
+      - name: Install desktop build libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev
+      - run: npm ci
+      - run: npm test
+      - run: cargo test --workspace --locked
+      - run: npm run package:linux
+      - name: Verify fresh install, legacy upgrade and coexistence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p artifacts/legacy
+          gh release download v0.3.0 --pattern 'Parley_0.3.0_amd64.deb' --pattern SHA256SUMS --dir artifacts/legacy
+          (cd artifacts/legacy && sha256sum -c SHA256SUMS)
+          bash scripts/test-deb-install.sh target/release/bundle/deb/ParleyDesktop_*.deb artifacts/legacy/Parley_0.3.0_amd64.deb
+      - name: Create a draft release for review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "Parley $RELEASE_TAG — Linux preview"
+          gh release upload "$RELEASE_TAG" target/release/bundle/deb/ParleyDesktop_*.deb target/release/bundle/deb/SHA256SUMS

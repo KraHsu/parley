@@ -1,3 +1,4 @@
+import { apiError } from './api-error'
 import type { ApiProfile, Conversation } from './types'
 
 // Wire objects are checked at protocol boundaries; unknown events remain forward-compatible.
@@ -61,8 +62,12 @@ async function request(url: string, options: RequestInit): Promise<Response> {
     )
   }
   if (!response.ok) {
-    await response.body?.cancel()
-    throw new Error(`API 请求失败（HTTP ${response.status}）。请检查密钥、模型、额度和服务地址。`)
+    const h = new Headers(options.headers)
+    throw await apiError(response, [
+      h.get('Authorization')?.replace(/^Bearer /, '') ?? '',
+      h.get('x-api-key') ?? '',
+      h.get('x-goog-api-key') ?? '',
+    ])
   }
   return response
 }

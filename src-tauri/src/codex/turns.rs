@@ -247,7 +247,9 @@ pub(super) async fn send(
         if saved.pane != prepare.pane {
             return Err("会话面板不匹配。".into());
         }
-        if !saved.signature.is_empty() && saved.signature != signature_copy {
+        if !saved.signature.is_empty()
+            && !crate::chat::same_conversation_settings(&saved.signature, &signature_copy)
+        {
             return Err("会话设置已变更，请新建对话。".into());
         }
         let input = c
@@ -257,7 +259,7 @@ pub(super) async fn send(
         if lane.active {
             return Err("当前面板仍在回复中。".into());
         }
-        let thread = if lane.signature == signature_copy
+        let thread = if crate::chat::same_conversation_settings(&lane.signature, &signature_copy)
             && lane.conversation.as_deref() == Some(&prepare.conversation_id)
         {
             lane.thread.clone()

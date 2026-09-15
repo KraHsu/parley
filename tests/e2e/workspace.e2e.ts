@@ -1,0 +1,219 @@
+import { test, expect, type Page } from '@playwright/test'
+async function ready(page: Page) {
+  await page.goto('./')
+  await page.getByRole('button', { name: '设置', exact: true }).click()
+  const form = page.locator('form.new-profile')
+  await form.getByLabel('配置名称').fill('Fixture API')
+  await form.getByLabel('API 服务地址').fill('http://127.0.0.1:4179/v1')
+  await form.getByLabel('API Key').fill('fixture-key')
+  await form.getByRole('button', { name: '保存服务' }).click()
+  await expect(page.getByText('服务已添加。请为两个面板分别选择模型。')).toBeVisible()
+  await page.getByRole('button', { name: '完成', exact: true }).click()
+  for (const pane of ['main', 'tutor']) {
+    await page.getByLabel(`${pane} 模型`, { exact: true }).fill('fixture')
+    await page.getByLabel(`${pane} 模型`, { exact: true }).press('Tab')
+  }
+}
+async function addWord(page: Page) {
+  await page.getByRole('button', { name: /^词句/ }).click()
+  await page.getByRole('button', { name: '＋ 添加词句' }).click()
+  const editor = page.getByRole('dialog', { name: '收藏词句' })
+  await editor.getByLabel('词句', { exact: true }).fill('break the ice')
+  await editor.getByLabel('释义', { exact: true }).fill('打破冷场')
+  return editor
+}
+test('saves a word, rejects an oversized tag, reloads and restores a downloaded backup', async ({
+  page,
+}) => {
+  await ready(page)
+  const editor = await addWord(page)
+  await editor.getByLabel('标签', { exact: true }).fill('x'.repeat(101))
+  await editor.getByRole('button', { name: '保存词句' }).click()
+  await expect(editor.getByRole('alert')).toContainText('100')
+  await editor.getByLabel('标签', { exact: true }).fill('daily, grammar')
+  await editor.getByRole('button', { name: '保存词句' }).click()
+  await expect(editor).not.toBeVisible()
+  await page.reload()
+  await page.getByRole('button', { name: /^词句/ }).click()
+  await expect(page.getByRole('heading', { name: 'break the ice' })).toBeVisible()
+  await page.getByText('备份', { exact: true }).click()
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: '导出 Web 备份' }).click()
+  const file = await download
+  await page.getByLabel('导入 Web 备份文件').setInputFiles((await file.path())!)
+  const restore = page.getByRole('dialog', { name: '恢复 Web 备份' })
+  await restore.getByRole('button', { name: '确认恢复' }).click()
+  await expect(restore).not.toBeVisible()
+  await expect(page.getByText('备份已恢复。API Key 不在备份中，请重新填写。')).toBeVisible()
+})
+test('keeps the restore preview and original durable state after an IndexedDB failure', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const original = IDBObjectStore.prototype.put
+    IDBObjectStore.prototype.put = function (...args: Parameters<typeof original>) {
+      const request = original.apply(this, args)
+      if ((window as unknown as { failSave: boolean }).failSave && this.name === 'words')
+        this.transaction.abort()
+      return request
+    }
+  })
+  await ready(page)
+  const editor = await addWord(page)
+  await editor.getByRole('button', { name: '保存词句' }).click()
+  await expect(editor).not.toBeVisible()
+  const state = (await page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve) => {
+      const req = indexedDB.open('parley-web')
+      req.onsuccess = () => resolve(req.result)
+    })
+    const tx = db.transaction(['workspace', 'conversations'])
+    const get = (req: IDBRequest) =>
+      new Promise<unknown>((resolve) => {
+        req.onsuccess = () => resolve(req.result)
+      })
+    const [meta, conversations] = await Promise.all([
+      get(tx.objectStore('workspace').get('current')),
+      get(tx.objectStore('conversations').getAll()),
+    ])
+    db.close()
+    return { meta, conversations }
+  })) as { meta: { settings: unknown; active: unknown }; conversations: { id: string }[] }
+  const backup = {
+    app: 'parley-web',
+    state: {
+      version: 1,
+      settings: state.meta.settings,
+      active: state.meta.active,
+      profiles: [],
+      conversations: state.conversations.map((c) => ({ ...c, profileId: '', messages: [] })),
+      words: [
+        {
+          id: 'replacement',
+          text: 'replacement',
+          language: 'en',
+          meaning: '',
+          note: '',
+          tags: [],
+          source: null,
+          createdAt: 1,
+          review: null,
+        },
+      ],
+    },
+  }
+  await page.getByLabel('导入 Web 备份文件').setInputFiles({
+    name: 'backup.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(backup)),
+  })
+  await page.evaluate(() => {
+    ;(window as unknown as { failSave: boolean }).failSave = true
+  })
+  const restore = page.getByRole('dialog', { name: '恢复 Web 备份' })
+  await restore.getByRole('button', { name: '确认恢复' }).click()
+  await expect(restore.getByRole('alert')).toContainText('本地保存失败')
+  await expect(restore).toBeVisible()
+  await restore.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'break the ice' })).toBeVisible()
+  await page.reload()
+  await page.getByRole('button', { name: /^词句/ }).click()
+  await expect(page.getByRole('heading', { name: 'break the ice' })).toBeVisible()
+})
+test('keeps tutor context when changing task and does not send IME confirmation Enter', async ({
+  page,
+}) => {
+  await ready(page)
+  const input = page.getByLabel('tutor 输入', { exact: true })
+  await input.fill('请解释 break the ice')
+  await input.dispatchEvent('compositionstart')
+  await input.press('Enter')
+  await expect(page.locator('.web-message.assistant')).toHaveCount(0)
+  await input.dispatchEvent('compositionend')
+  await input.press('Enter')
+  await expect(page.locator('.web-message.assistant')).toContainText('friendly hello')
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0)
+  await page.getByLabel('辅导任务', { exact: true }).selectOption('translate')
+  await expect(input).toHaveAttribute('placeholder', '粘贴需要翻译的句子…')
+  await input.fill('翻译一下刚才那句话')
+  await input.press('Enter')
+  await expect(page.locator('.web-message.assistant').last()).toContainText('刚才那句话的翻译')
+  await expect(page.locator('.web-message.assistant')).toHaveCount(2)
+})
+async function seedLegacy(page: Page, count: number, oversizedTag = false) {
+  await page.goto('./_seed')
+  await page.evaluate(
+    async ({ count, oversizedTag }) => {
+      const conversation = (pane: string) => ({
+        id: pane,
+        pane,
+        title: '新的对话',
+        profileId: '',
+        model: '',
+        target: 'en',
+        native: 'zh-CN',
+        draft: '',
+        messages: [],
+        createdAt: 1,
+      })
+      const state = {
+        version: 1,
+        settings: { target: 'en', native: 'zh-CN' },
+        profiles: [],
+        conversations: [conversation('main'), conversation('tutor')],
+        active: { main: 'main', tutor: 'tutor' },
+        words: Array.from({ length: count }, (_, i) => ({
+          id: `word-${i}`,
+          text: `word ${i}`,
+          language: 'en',
+          meaning: `meaning ${i}`,
+          note: '',
+          tags: [oversizedTag ? 'x'.repeat(101) : 'daily'],
+          source: null,
+          createdAt: i,
+          review: null,
+        })),
+      }
+      await new Promise<void>((resolve, reject) => {
+        const request = indexedDB.open('parley-web', 1)
+        request.onupgradeneeded = () => request.result.createObjectStore('workspace')
+        request.onsuccess = () => {
+          const db = request.result,
+            tx = db.transaction('workspace', 'readwrite')
+          tx.objectStore('workspace').put({ revision: 1, state }, 'current')
+          tx.oncomplete = () => {
+            db.close()
+            resolve()
+          }
+          tx.onerror = () => reject(tx.error)
+        }
+      })
+    },
+    { count, oversizedTag },
+  )
+  await page.goto('./')
+}
+test('recovers a legacy oversized tag and exports the untouched original first', async ({
+  page,
+}) => {
+  await seedLegacy(page, 1, true)
+  await expect(page.getByRole('button', { name: '导出原始数据' })).toBeVisible()
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: '修复过长标签' }).click()
+  expect((await download).suggestedFilename()).toContain('before-repair')
+  await expect(page.getByText('已缩短 1 个过长标签，原始数据已导出。')).toBeVisible()
+  await page.reload()
+  await page.getByRole('button', { name: /^词句/ }).click()
+  await expect(page.getByRole('heading', { name: 'word 0', exact: true })).toBeVisible()
+})
+test('paginates a large word list and searches across all pages', async ({ page }) => {
+  await seedLegacy(page, 125)
+  await page.getByRole('button', { name: /^词句/ }).click()
+  await expect(page.locator('.word-grid > article')).toHaveCount(50)
+  await page.getByRole('button', { name: '下一页' }).click()
+  await expect(page.getByRole('heading', { name: 'word 50', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '下一页' }).click()
+  await expect(page.locator('.word-grid > article')).toHaveCount(25)
+  await page.getByLabel('搜索词句', { exact: true }).fill('meaning 1')
+  await expect(page.getByRole('heading', { name: 'word 1', exact: true })).toBeVisible()
+})

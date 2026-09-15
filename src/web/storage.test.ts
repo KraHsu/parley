@@ -55,3 +55,26 @@ describe('web backups', () => {
     expect(() => validateState(cli)).toThrow()
   })
 })
+
+it('round-trips a valid backup larger than the former 32 MiB limit in both formats', async () => {
+  const { exportBackup, readBackup } = await import('./backup')
+  const state = initialState()
+  state.words = Array.from({ length: 1700 }, (_, i) => ({
+    id: `word-${i}`,
+    text: 'example',
+    language: 'en',
+    meaning: '词'.repeat(7000),
+    note: '',
+    tags: [],
+    source: null,
+    createdAt: 1,
+    review: null,
+  }))
+  const legacy = exportState(state)
+  expect(new TextEncoder().encode(legacy).length).toBeGreaterThan(32 * 1024 * 1024)
+  expect(importState(legacy).words).toHaveLength(1700)
+  const backup = exportBackup(state)
+  expect(backup.size).toBeGreaterThan(32 * 1024 * 1024)
+  expect((await readBackup(backup)).words).toEqual(state.words)
+  await expect(readBackup(backup.slice(0, backup.size - 100))).rejects.toThrow()
+})

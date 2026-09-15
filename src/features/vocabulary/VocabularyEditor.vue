@@ -5,7 +5,7 @@ import { useVocabularyStore } from './store'
 import { useChatStore } from '../chat/store'
 import type { EntryPage, VocabularyEntry } from './types'
 const vocabulary = useVocabularyStore()
-const codex = useChatStore()
+const chat = useChatStore()
 const dialog = ref<HTMLDialogElement>()
 const discardConfirm = ref(false)
 const related = ref<EntryPage['entries']>([])
@@ -67,10 +67,10 @@ async function explain() {
     sentence,
   })
   await vocabulary.closeEditor()
-  codex.tutorMode = 'explain'
+  chat.tutorMode = 'explain'
   vocabulary.tutorFocusRequest++
-  codex.mobilePane = 'tutor'
-  await codex.send(
+  chat.mobilePane = 'tutor'
+  await chat.send(
     'tutor',
     `请解释下面的学习词句。先给简短释义，再解释用法。\n${snapshot}`,
     'explain',
@@ -85,7 +85,7 @@ async function explain() {
     aria-labelledby="word-editor-title"
     @cancel.prevent="vocabulary.closeEditor()"
   >
-    <form v-if="vocabulary.editor" :inert="codex.closing" @submit.prevent="vocabulary.save()">
+    <form v-if="vocabulary.editor" :inert="chat.closing" @submit.prevent="vocabulary.save()">
       <header class="dialog-heading">
         <div>
           <p class="overline">KEEP THE CONTEXT</p>
@@ -182,8 +182,8 @@ async function explain() {
             type="button"
             class="secondary-button"
             :disabled="
-              !codex.isReady('tutor') ||
-              codex.lanes.tutor.busy ||
+              !chat.isReady('tutor') ||
+              chat.lanes.tutor.busy ||
               !vocabulary.editor.fields.text.trim()
             "
             @click="explain"

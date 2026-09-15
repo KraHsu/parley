@@ -1,17 +1,17 @@
 <script setup lang="ts">
 import { computed, ref, toRef } from 'vue'
 import AppIcon from '../../shared/AppIcon.vue'
-import MessageList from '../codex/MessageList.vue'
+import MessageList from '../chat/MessageList.vue'
 import ImportedContext from '../chat/ImportedContext.vue'
 import { useChatStore } from '../chat/store'
 import { tutorPlaceholders } from '../../shared/tutor-placeholders'
-const codex = useChatStore()
-const lane = codex.lanes.tutor
+const chat = useChatStore()
+const lane = chat.lanes.tutor
 import type { IconName } from '../../shared/AppIcon.vue'
 
 const draft = toRef(lane, 'draft')
 const input = ref<HTMLTextAreaElement>()
-const activeMode = toRef(codex, 'tutorMode')
+const activeMode = toRef(chat, 'tutorMode')
 const modes: {
   id: string
   label: string
@@ -51,9 +51,9 @@ function fillDraft(text: string) {
   input.value?.focus()
 }
 async function send() {
-  if (!draft.value.trim() || lane.busy || !codex.isReady('tutor')) return
+  if (!draft.value.trim() || lane.busy || !chat.isReady('tutor')) return
   const text = draft.value
-  await codex.send('tutor', text, activeMode.value)
+  await chat.send('tutor', text, activeMode.value)
 }
 function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -70,8 +70,8 @@ function onKeydown(event: KeyboardEvent) {
       <h2 id="tutor-title">语言助手</h2>
       <button
         class="text-button"
-        :disabled="lane.busy || !codex.initialized || codex.navigating"
-        @click="codex.reset('tutor')"
+        :disabled="lane.busy || !chat.initialized || chat.navigating"
+        @click="chat.reset('tutor')"
       >
         重置
       </button>
@@ -107,7 +107,7 @@ function onKeydown(event: KeyboardEvent) {
           ><AppIcon name="arrow-right" :size="14" />
         </button>
       </div>
-      <div v-if="!lane.messages.length && !codex.terminalContext" class="context-tip">
+      <div v-if="!lane.messages.length && !chat.terminalContext" class="context-tip">
         <AppIcon name="quote" :size="16" />
         <p>读到不懂的词句？<br /><span>选中对话中的词句，即可解释、翻译或收藏。</span></p>
       </div>
@@ -119,7 +119,7 @@ function onKeydown(event: KeyboardEvent) {
           id="tutor-input"
           ref="input"
           v-model="draft"
-          :disabled="!codex.initialized || codex.closing"
+          :disabled="!chat.initialized || chat.closing"
           @keydown="onKeydown"
           dir="auto"
           rows="3"
@@ -130,11 +130,9 @@ function onKeydown(event: KeyboardEvent) {
           <span>用母语问，也没关系</span
           ><button
             class="send-button"
-            :disabled="
-              !lane.busy && (!codex.isReady('tutor') || !draft.trim() || !codex.tutorModel)
-            "
+            :disabled="!lane.busy && (!chat.isReady('tutor') || !draft.trim() || !chat.tutorModel)"
             :aria-label="lane.busy ? '停止辅导回复' : '发送辅导问题'"
-            @click="lane.busy ? codex.stop('tutor') : send()"
+            @click="lane.busy ? chat.stop('tutor') : send()"
           >
             <AppIcon :name="lane.busy ? 'close' : 'arrow-up'" :size="18" />
           </button>
@@ -142,7 +140,7 @@ function onKeydown(event: KeyboardEvent) {
       </div>
       <p v-if="lane.error" class="inline-error" role="alert">{{ lane.error }}</p>
       <p id="tutor-status" class="composer-caption">
-        {{ codex.isReady('tutor') ? codex.tutorModel : codex.paneLabel('tutor') }}
+        {{ chat.isReady('tutor') ? chat.tutorModel : chat.paneLabel('tutor') }}
       </p>
     </div>
   </section>

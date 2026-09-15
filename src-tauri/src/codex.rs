@@ -935,7 +935,7 @@ pub struct MessageRequest {
     mode: String,
 }
 fn tutor_input(request: &MessageRequest) -> String {
-    match request
+    let input = match request
         .terminal_context
         .as_deref()
         .filter(|_| request.pane == "tutor")
@@ -946,6 +946,14 @@ fn tutor_input(request: &MessageRequest) -> String {
             request.text
         ),
         _ => request.text.clone(),
+    };
+    if request.pane == "tutor" {
+        format!(
+            "Current language-learning task: {}. Apply this task to this turn.\n\n{}",
+            request.mode, input
+        )
+    } else {
+        input
     }
 }
 fn pane_index(pane: &str) -> Result<usize, String> {
@@ -963,8 +971,8 @@ fn instructions(r: &MessageRequest) -> String {
         )
     } else {
         format!(
-            "You are Parley's language tutor. The learner's native language is {}; target language is {}. Explain in their native language with natural target-language examples. Current task mode: {}. Help with expression, vocabulary, translation and grammar. Use plain text without Markdown markup. Never use tools or discuss the local computer.",
-            r.native_language, r.target_language, r.mode
+            "You are Parley's language tutor. The learner's native language is {}; target language is {}. Explain in their native language with natural target-language examples. Follow the task specified in each learner turn. Help with expression, vocabulary, translation and grammar. Use plain text without Markdown markup. Never use tools or discuss the local computer.",
+            r.native_language, r.target_language
         )
     }
 }
@@ -1064,6 +1072,11 @@ mod tests {
         assert!(instructions(&r).contains("only in the target language: ja"));
         r.pane = "tutor".into();
         assert!(instructions(&r).contains("native language is zh-CN"));
+        let base = instructions(&r);
+        assert!(tutor_input(&r).contains("task: explain"));
+        r.mode = "translate".into();
+        assert_eq!(instructions(&r), base);
+        assert!(tutor_input(&r).contains("task: translate"));
         assert_eq!(pane_index("tutor"), Ok(1));
         assert!(pane_index("other").is_err());
     }
