@@ -2,10 +2,11 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import type { WebWorkspace } from './store'
 import type { Message, Pane, Word } from './types'
+import { tutorPlaceholders } from '../shared/tutor-placeholders'
 const props = defineProps<{ w: WebWorkspace; pane: Pane }>()
 const emit = defineEmits<{ collect: [word: Word]; tutor: [] }>()
 const c = computed(() => props.w.lane(props.pane))
-const mode = ref('explain'),
+const mode = ref<keyof typeof tutorPlaceholders>('explain'),
   composing = ref(false),
   scroller = ref<HTMLElement>()
 const choices = computed(() => props.w.models.get(c.value.profileId) ?? [])
@@ -229,9 +230,7 @@ watch(
         v-model="c.draft"
         :aria-label="`${pane} 输入`"
         :disabled="!w.canEdit"
-        :placeholder="
-          pane === 'main' ? `用 ${c.target} 写下你的想法…` : '这个词是什么意思？这句话怎么说？'
-        "
+        :placeholder="pane === 'main' ? `用 ${c.target} 写下你的想法…` : tutorPlaceholders[mode]"
         maxlength="20000"
         @compositionstart="composing = true"
         @compositionend="composing = false"

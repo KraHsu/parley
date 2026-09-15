@@ -1,3 +1,5 @@
+@import './selection.css';
+
 :root {
   font-family: 'Inter', 'Noto Sans', 'Noto Sans CJK SC', 'Microsoft YaHei', system-ui, sans-serif;
   color: #292a32;
@@ -1552,7 +1554,6 @@ textarea::-webkit-scrollbar-thumb {
 }
 .data-path {
   overflow-wrap: anywhere;
-  user-select: text;
 }
 .message-state {
   display: block;
@@ -1662,7 +1663,6 @@ textarea::-webkit-scrollbar-thumb {
   margin: 8px 0;
   padding: 8px 12px;
   border-left: 2px solid #a895d8;
-  user-select: text;
 }
 .terminal-context-actions {
   display: flex;

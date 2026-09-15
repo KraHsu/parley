@@ -4,6 +4,7 @@ import AppIcon from '../../shared/AppIcon.vue'
 import MessageList from '../codex/MessageList.vue'
 import ImportedContext from '../chat/ImportedContext.vue'
 import { useChatStore } from '../chat/store'
+import { tutorPlaceholders } from '../../shared/tutor-placeholders'
 const codex = useChatStore()
 const lane = codex.lanes.tutor
 import type { IconName } from '../../shared/AppIcon.vue'
@@ -24,7 +25,7 @@ const modes: {
     label: '怎么说',
     icon: 'chat',
     description: '先用母语说出想法，一起找到自然的表达。',
-    placeholder: '我想表达……，怎么说更自然？',
+    placeholder: tutorPlaceholders.express,
     examples: ['“我最近迷上了……”怎么说？', '怎样礼貌地表达不同意见？'],
   },
   {
@@ -32,7 +33,7 @@ const modes: {
     label: '解释',
     icon: 'quote',
     description: '从词义到句子结构，把不确定的地方弄明白。',
-    placeholder: '粘贴你想理解的词语或句子…',
+    placeholder: tutorPlaceholders.explain,
     examples: ['这个词在不同语境中有什么区别？', '帮我拆解这句话的语法结构。'],
   },
   {
@@ -40,7 +41,7 @@ const modes: {
     label: '翻译',
     icon: 'translate',
     description: '用母语理解句意，也看看更地道的说法。',
-    placeholder: '粘贴需要翻译的句子…',
+    placeholder: tutorPlaceholders.translate,
     examples: ['帮我翻译这句话，并解释语气。', '这句话直译和自然表达有什么区别？'],
   },
 ]

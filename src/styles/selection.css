@@ -1,0 +1,40 @@
+/* App chrome should not create a text selection while clicking or dragging. */
+body,
+button,
+button *,
+a,
+a *,
+summary,
+summary *,
+select,
+option {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Keep native selection and copying for editable fields and learning content.
+   The WebKit prefix also covers the desktop WebView on macOS and Linux. */
+input,
+textarea,
+[contenteditable='true'],
+[contenteditable='plaintext-only'],
+.study-body,
+.message-text,
+.quote-context > p,
+.imported-context-messages article p,
+blockquote,
+.data-path,
+.word-detail > h2,
+.word-meaning,
+.word-note,
+.word-card > h2,
+.word-card > p,
+.word-card .tags,
+.review-card > h2,
+.review-answer,
+.inline-error,
+.web-error,
+.web-banner.danger {
+  -webkit-user-select: text;
+  user-select: text;
+}
