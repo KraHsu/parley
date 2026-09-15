@@ -39,7 +39,7 @@ for name in Parley.desktop parley-tutor.desktop parley-terminal.desktop; do
   entry="${XDG_DATA_HOME:-$HOME/.local/share}/applications/$name"
   if [ -f "$entry" ] && grep -q 'WEBKIT_FORCE_VBLANK_TIMER=1 /usr/bin/parley' "$entry"; then
     cp -p -- "$entry" "$entry.before-package-rename-$stamp"
-    sed -i -e 's|/usr/bin/parley\( \|$\)|/usr/bin/parley-desktop\1|' \
+    sed -i -E -e 's#/usr/bin/parley([[:space:]]|$)#/usr/bin/parley-desktop\1#' \
       -e 's|^Icon=parley$|Icon=parley-desktop|' "$entry"
   fi
 done
