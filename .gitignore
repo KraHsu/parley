@@ -23,3 +23,9 @@ Thumbs.db
 auth.json
 
 dist-web/
+
+artifacts/
+
+# Demo production stays local; never publish it with the app.
+public/demo/
+scripts/marketing/
