@@ -20,7 +20,8 @@ serde_json = "1"
 tokio = { version = "1", features = ["process", "io-util", "sync", "time", "macros"] }
 open = "5"
 url = "2"
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+# Keep SQLite bundled; all application queries go through Diesel.
+libsqlite3-sys = { version = "0.38.2", features = ["bundled"] }
 
 dirs = "6"
 uuid = { version = "1.26.1", features = ["v4", "serde"] }
@@ -30,3 +31,11 @@ sha2 = "0.10"
 language-tags = "0.3"
 rfd = { version = "0.17.2", default-features = false, features = ["gtk3"] }
 tempfile = "3.27.0"
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls", "system-proxy"] }
+futures-util = "0.3"
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+zeroize = "1"
+diesel = { version = "2.3.13", default-features = false, features = ["sqlite", "32-column-tables", "returning_clauses_for_sqlite_3_35"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

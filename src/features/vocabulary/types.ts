@@ -1,3 +1,5 @@
+import type { BackendKind, Provider } from '../backends/types'
+
 export interface EntryFields {
   language: string
   languageLabel: string
@@ -21,6 +23,7 @@ export interface VocabularySource {
   end: number
   locatorVersion: number
   truncated: boolean
+  backend?: { kind: BackendKind; provider: Provider; model: string | null }
 }
 export interface Occurrence extends VocabularySource {
   id: string

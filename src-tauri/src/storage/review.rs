@@ -1,149 +1,169 @@
+use super::learning_rows::{CardRow, length, trim};
+use super::schema::{
+    vocabulary_cards as c, vocabulary_entries as e, vocabulary_entry_tags as et,
+    vocabulary_reviews as r, vocabulary_tags as tags,
+};
 use super::vocabulary::{cached, check_revision, fingerprint, get_entry, remember};
 use super::{Storage, error, now};
 use crate::review::*;
 use crate::vocabulary::{Entry, Result, bounded, normalized};
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use diesel::prelude::*;
 
-pub(super) const CARD_COLUMNS: &str =
-    "id,entry_id,direction,stage,due_at,last_reviewed_at,suspended,schedule_version,revision";
-pub(super) fn card_row(r: &Row<'_>) -> rusqlite::Result<Card> {
-    Ok(Card {
-        id: r.get(0)?,
-        entry_id: r.get(1)?,
-        direction: r.get(2)?,
-        stage: r.get(3)?,
-        due_at: r.get(4)?,
-        last_reviewed_at: r.get(5)?,
-        suspended: r.get(6)?,
-        schedule_version: r.get(7)?,
-        revision: r.get(8)?,
-    })
+pub(super) fn get_card(db: &mut SqliteConnection, id: &str) -> Result<Card> {
+    c::table
+        .find(id)
+        .select(CardRow::as_select())
+        .first::<CardRow>(db)
+        .optional()
+        .map_err(error)?
+        .ok_or("复习卡片已不存在。")?
+        .try_into()
 }
-pub(super) fn get_card(db: &Connection, id: &str) -> Result<Card> {
-    db.query_row(
-        &format!("SELECT {CARD_COLUMNS} FROM vocabulary_cards WHERE id=?1"),
-        [id],
-        card_row,
-    )
-    .optional()
-    .map_err(error)?
-    .ok_or("复习卡片已不存在。".into())
+pub(super) fn get_cards(db: &mut SqliteConnection, entry_id: &str) -> Result<Vec<Card>> {
+    c::table
+        .filter(c::entry_id.eq(entry_id))
+        .order(c::direction)
+        .select(CardRow::as_select())
+        .load::<CardRow>(db)
+        .map_err(error)?
+        .into_iter()
+        .map(TryInto::try_into)
+        .collect()
 }
-pub(super) fn get_cards(db: &Connection, entry_id: &str) -> Result<Vec<Card>> {
-    db.prepare(&format!(
-        "SELECT {CARD_COLUMNS} FROM vocabulary_cards WHERE entry_id=?1 ORDER BY direction"
-    ))
-    .map_err(error)?
-    .query_map([entry_id], card_row)
-    .map_err(error)?
-    .collect::<rusqlite::Result<Vec<_>>>()
-    .map_err(error)
+pub(super) fn get_tags(db: &mut SqliteConnection, entry_id: &str) -> Result<Vec<String>> {
+    tags::table
+        .inner_join(et::table.on(et::tag_id.eq(tags::id)))
+        .filter(et::entry_id.eq(entry_id))
+        .order(tags::name)
+        .select(tags::name)
+        .load(db)
+        .map_err(error)
 }
-pub(super) fn get_tags(db: &Connection, entry_id: &str) -> Result<Vec<String>> {
-    db.prepare("SELECT t.name FROM vocabulary_tags t JOIN vocabulary_entry_tags et ON et.tag_id=t.id WHERE et.entry_id=?1 ORDER BY t.name").map_err(error)?.query_map([entry_id],|r|r.get(0)).map_err(error)?.collect::<rusqlite::Result<Vec<_>>>().map_err(error)
-}
-pub(super) fn put_card(db: &Connection, card: &Card) -> Result<()> {
-    db.execute("UPDATE vocabulary_cards SET stage=?2,due_at=?3,last_reviewed_at=?4,suspended=?5,schedule_version=?6,revision=?7 WHERE id=?1",params![card.id,card.stage,card.due_at,card.last_reviewed_at,card.suspended,card.schedule_version,card.revision]).map_err(error)?;
+pub(super) fn put_card(db: &mut SqliteConnection, card: &Card) -> Result<()> {
+    diesel::update(c::table.find(&card.id))
+        .set((
+            c::stage.eq(i64::from(card.stage)),
+            c::due_at.eq(card.due_at),
+            c::last_reviewed_at.eq(card.last_reviewed_at),
+            c::suspended.eq(i64::from(card.suspended)),
+            c::schedule_version.eq(i64::from(card.schedule_version)),
+            c::revision.eq(card.revision),
+        ))
+        .execute(db)
+        .map_err(error)?;
     Ok(())
 }
-pub(super) fn set_tags(db: &Connection, id: &str, tags: &[String]) -> Result<()> {
-    if tags.len() > 20 {
+pub(super) fn set_tags(db: &mut SqliteConnection, id: &str, values: &[String]) -> Result<()> {
+    if values.len() > 20 {
         return Err("每条词句最多 20 个标签。".into());
     }
     let mut names = std::collections::BTreeSet::new();
-    for tag in tags {
+    for tag in values {
         bounded(tag, 50, "标签")?;
         if !tag.trim().is_empty() {
             names.insert(normalized(tag.trim()));
         }
     }
-    db.execute("DELETE FROM vocabulary_entry_tags WHERE entry_id=?1", [id])
+    diesel::delete(et::table.filter(et::entry_id.eq(id)))
+        .execute(db)
         .map_err(error)?;
     for name in names {
-        db.execute(
-            "INSERT INTO vocabulary_tags(id,name) VALUES(?1,?2) ON CONFLICT(name) DO NOTHING",
-            params![uuid::Uuid::new_v4().to_string(), name],
-        )
-        .map_err(error)?;
-        db.execute(
-            "INSERT INTO vocabulary_entry_tags SELECT ?1,id FROM vocabulary_tags WHERE name=?2",
-            params![id, name],
-        )
-        .map_err(error)?;
+        diesel::insert_into(tags::table)
+            .values((
+                tags::id.eq(uuid::Uuid::new_v4().to_string()),
+                tags::name.eq(&name),
+            ))
+            .on_conflict(tags::name)
+            .do_nothing()
+            .execute(db)
+            .map_err(error)?;
+        let tag = tags::table
+            .filter(tags::name.eq(name))
+            .select(tags::id)
+            .first::<String>(db)
+            .map_err(error)?;
+        diesel::insert_into(et::table)
+            .values((et::entry_id.eq(id), et::tag_id.eq(tag)))
+            .execute(db)
+            .map_err(error)?;
     }
     Ok(())
 }
 impl Storage {
     pub fn vocabulary_tags_save(&self, request: &TagsRequest) -> Result<Entry> {
         let hash = fingerprint(request)?;
-        let mut db = self.db.lock().unwrap();
-        let tx = db.transaction().map_err(error)?;
-        if cached::<String>(&tx, &request.request_id, "tags", &hash)?.is_some() {
-            return get_entry(&tx, &request.entry_id);
-        }
-        let entry = get_entry(&tx, &request.entry_id)?;
-        check_revision(&entry, request.expected_revision)?;
-        if entry.deleted_at.is_some() {
-            return Err("请先恢复词句。".into());
-        }
-        set_tags(&tx, &entry.id, &request.tags)?;
-        tx.execute(
-            "UPDATE vocabulary_entries SET revision=revision+1,updated_at=?2 WHERE id=?1",
-            params![entry.id, now()],
-        )
-        .map_err(error)?;
-        remember(&tx, &request.request_id, "tags", &hash, &entry.id)?;
-        let result = get_entry(&tx, &entry.id)?;
-        tx.commit().map_err(error)?;
-        Ok(result)
+        self.repository_transaction(|db| {
+            if cached::<String>(db, &request.request_id, "tags", &hash)?.is_some() {
+                return get_entry(db, &request.entry_id);
+            }
+            let entry = get_entry(db, &request.entry_id)?;
+            check_revision(&entry, request.expected_revision)?;
+            if entry.deleted_at.is_some() {
+                return Err("请先恢复词句。".into());
+            }
+            set_tags(db, &entry.id, &request.tags)?;
+            diesel::update(e::table.find(&entry.id))
+                .set((e::revision.eq(e::revision + 1_i64), e::updated_at.eq(now())))
+                .execute(db)
+                .map_err(error)?;
+            remember(db, &request.request_id, "tags", &hash, &entry.id)?;
+            get_entry(db, &entry.id)
+        })
     }
     pub fn vocabulary_card_save(&self, request: &CardRequest) -> Result<Card> {
         if !["recognition", "production"].contains(&request.direction.as_str()) {
             return Err("未知的复习方向。".into());
         }
         let hash = fingerprint(request)?;
-        let mut db = self.db.lock().unwrap();
-        let tx = db.transaction().map_err(error)?;
-        if let Some(id) = cached::<String>(&tx, &request.request_id, "card", &hash)? {
-            return get_card(&tx, &id);
-        }
-        let entry = get_entry(&tx, &request.entry_id)?;
-        if entry.deleted_at.is_some() || entry.fields.meaning.trim().is_empty() {
-            return Err("请先恢复词句并补充释义，再加入复习。".into());
-        }
-        let existing: Option<String> = tx
-            .query_row(
-                "SELECT id FROM vocabulary_cards WHERE entry_id=?1 AND direction=?2",
-                params![entry.id, request.direction],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(error)?;
-        let card = if let Some(id) = existing {
-            let mut card = get_card(&tx, &id)?;
-            if request.expected_revision != Some(card.revision) {
-                return Err("复习卡已有更新，请刷新后再操作。".into());
+        self.repository_transaction(|db| {
+            if let Some(id) = cached::<String>(db, &request.request_id, "card", &hash)? {
+                return get_card(db, &id);
             }
-            card.suspended = request.suspended;
-            card.revision += 1;
-            if request.reset {
-                card.stage = 0;
-                card.due_at = now();
-                card.last_reviewed_at = None;
+            let entry = get_entry(db, &request.entry_id)?;
+            if entry.deleted_at.is_some() || entry.fields.meaning.trim().is_empty() {
+                return Err("请先恢复词句并补充释义，再加入复习。".into());
             }
-            put_card(&tx, &card)?;
-            card
-        } else {
-            if request.expected_revision.is_some() {
-                return Err("复习卡已不存在，请刷新。".into());
-            }
-            let id = uuid::Uuid::new_v4().to_string();
-            tx.execute("INSERT INTO vocabulary_cards(id,entry_id,direction,due_at,suspended) VALUES(?1,?2,?3,?4,?5)",params![id,entry.id,request.direction,now(),request.suspended]).map_err(error)?;
-            get_card(&tx, &id)?
-        };
-        remember(&tx, &request.request_id, "card", &hash, &card.id)?;
-        tx.commit().map_err(error)?;
-        Ok(card)
+            let existing = c::table
+                .filter(c::entry_id.eq(&entry.id))
+                .filter(c::direction.eq(&request.direction))
+                .select(c::id)
+                .first::<String>(db)
+                .optional()
+                .map_err(error)?;
+            let card = if let Some(id) = existing {
+                let mut card = get_card(db, &id)?;
+                if request.expected_revision != Some(card.revision) {
+                    return Err("复习卡已有更新，请刷新后再操作。".into());
+                }
+                card.suspended = request.suspended;
+                card.revision += 1;
+                if request.reset {
+                    card.stage = 0;
+                    card.due_at = now();
+                    card.last_reviewed_at = None;
+                }
+                put_card(db, &card)?;
+                card
+            } else {
+                if request.expected_revision.is_some() {
+                    return Err("复习卡已不存在，请刷新。".into());
+                }
+                let id = uuid::Uuid::new_v4().to_string();
+                diesel::insert_into(c::table)
+                    .values((
+                        c::id.eq(&id),
+                        c::entry_id.eq(&entry.id),
+                        c::direction.eq(&request.direction),
+                        c::due_at.eq(now()),
+                        c::suspended.eq(i64::from(request.suspended)),
+                    ))
+                    .execute(db)
+                    .map_err(error)?;
+                get_card(db, &id)?
+            };
+            remember(db, &request.request_id, "card", &hash, &card.id)?;
+            Ok(card)
+        })
     }
     pub fn vocabulary_review_queue(
         &self,
@@ -166,58 +186,71 @@ impl Storage {
         if day_start > time || day_start < time - 27 * 60 * 60 * 1000 {
             return Err("今日起点无效，请刷新本地时间。".into());
         }
-        let db = self.db.lock().unwrap();
-        let eligible = "FROM vocabulary_cards c JOIN vocabulary_entries e ON e.id=c.entry_id WHERE e.deleted_at IS NULL AND length(trim(e.meaning))>0 AND c.suspended=0";
-        let due_count = db
-            .query_row(
-                &format!(
-                    "SELECT count(*) {eligible} AND c.last_reviewed_at IS NOT NULL AND c.due_at<=?1"
-                ),
-                [time],
-                |r| r.get(0),
-            )
-            .map_err(error)?;
-        let new_count = db
-            .query_row(
-                &format!("SELECT count(*) {eligible} AND c.last_reviewed_at IS NULL"),
-                [],
-                |r| r.get(0),
-            )
-            .map_err(error)?;
-        let next_due_at=db.query_row(&format!("SELECT min(c.due_at) {eligible} AND c.last_reviewed_at IS NOT NULL AND c.due_at>?1"),[time],|r|r.get(0)).map_err(error)?;
-        let mut stmt=db.prepare(&format!("SELECT c.id {eligible} AND c.last_reviewed_at IS NOT NULL AND c.due_at<=?1 ORDER BY c.due_at,c.id LIMIT ?2")).map_err(error)?;
-        let mut ids = stmt
-            .query_map(params![time, limit], |r| r.get::<_, String>(0))
-            .map_err(error)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(error)?;
-        let remaining = (limit as usize - ids.len()).min(new_limit as usize);
-        let mut stmt=db.prepare(&format!("SELECT c.id {eligible} AND c.last_reviewed_at IS NULL ORDER BY c.due_at,c.id LIMIT ?1")).map_err(error)?;
-        ids.extend(
-            stmt.query_map([remaining as u32], |r| r.get::<_, String>(0))
-                .map_err(error)?
-                .collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(error)?,
-        );
-        let items = ids
-            .into_iter()
-            .map(|id| {
-                let card = get_card(&db, &id)?;
-                Ok(ReviewItem {
-                    entry: get_entry(&db, &card.entry_id)?,
-                    card,
+        self.repository(|db| {
+            let eligible = c::table
+                .inner_join(e::table.on(e::id.eq(c::entry_id)))
+                .filter(e::deleted_at.is_null())
+                .filter(length(trim(e::meaning)).gt(0_i64))
+                .filter(c::suspended.eq(0_i64));
+            let due = eligible
+                .filter(c::last_reviewed_at.is_not_null())
+                .filter(c::due_at.le(time));
+            let fresh = eligible.filter(c::last_reviewed_at.is_null());
+            let due_count = due.count().get_result(db).map_err(error)?;
+            let new_count = fresh.count().get_result(db).map_err(error)?;
+            let next_due_at = eligible
+                .filter(c::last_reviewed_at.is_not_null())
+                .filter(c::due_at.gt(time))
+                .select(diesel::dsl::min(c::due_at))
+                .first(db)
+                .map_err(error)?;
+            let mut ids = due
+                .order((c::due_at, c::id))
+                .limit(i64::from(limit))
+                .select(c::id)
+                .load::<String>(db)
+                .map_err(error)?;
+            let remaining = (limit as usize - ids.len()).min(new_limit as usize);
+            ids.extend(
+                fresh
+                    .order((c::due_at, c::id))
+                    .limit(remaining as i64)
+                    .select(c::id)
+                    .load::<String>(db)
+                    .map_err(error)?,
+            );
+            let items = ids
+                .into_iter()
+                .map(|id| {
+                    let card = get_card(db, &id)?;
+                    Ok(ReviewItem {
+                        entry: get_entry(db, &card.entry_id)?,
+                        card,
+                    })
                 })
+                .collect::<Result<_>>()?;
+            let completed_today = r::table
+                .filter(r::reviewed_at.ge(day_start))
+                .filter(r::reviewed_at.le(time))
+                .filter(r::undone_at.is_null())
+                .count()
+                .get_result(db)
+                .map_err(error)?;
+            let last_review_id = r::table
+                .filter(r::undone_at.is_null())
+                .order((r::reviewed_at.desc(), r::rowid.desc()))
+                .select(r::id)
+                .first::<String>(db)
+                .optional()
+                .map_err(error)?;
+            Ok(ReviewQueue {
+                items,
+                due_count,
+                new_count,
+                next_due_at,
+                completed_today,
+                last_review_id,
             })
-            .collect::<Result<Vec<_>>>()?;
-        let completed_today=db.query_row("SELECT count(*) FROM vocabulary_reviews WHERE reviewed_at>=?1 AND reviewed_at<=?2 AND undone_at IS NULL",params![day_start,time],|r|r.get(0)).map_err(error)?;
-        let last_review_id=db.query_row("SELECT id FROM vocabulary_reviews WHERE undone_at IS NULL ORDER BY reviewed_at DESC,rowid DESC LIMIT 1",[],|r|r.get(0)).optional().map_err(error)?;
-        Ok(ReviewQueue {
-            items,
-            due_count,
-            new_count,
-            next_due_at,
-            completed_today,
-            last_review_id,
         })
     }
     pub fn vocabulary_review_grade(&self, request: &GradeRequest) -> Result<GradeResult> {
@@ -225,66 +258,79 @@ impl Storage {
     }
     fn grade_at(&self, request: &GradeRequest, time: i64) -> Result<GradeResult> {
         let hash = fingerprint(request)?;
-        let mut db = self.db.lock().unwrap();
-        let tx = db.transaction().map_err(error)?;
-        if let Some(result) = cached(&tx, &request.request_id, "grade", &hash)? {
-            return Ok(result);
-        }
-        let card = get_card(&tx, &request.card_id)?;
-        if card.revision != request.expected_revision {
-            return Err("这张卡片已经更新或评分，请刷新复习队列。".into());
-        }
-        let entry = get_entry(&tx, &card.entry_id)?;
-        if card.suspended
-            || entry.deleted_at.is_some()
-            || entry.fields.meaning.trim().is_empty()
-            || card.due_at > time
-        {
-            return Err("这张卡片当前不在可复习队列中。".into());
-        }
-        let next = schedule(&card, &request.rating, time)?;
-        let review_id = uuid::Uuid::new_v4().to_string();
-        tx.execute("INSERT INTO vocabulary_reviews(id,card_id,request_id,rating,reviewed_at,before_state,after_state) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![review_id,card.id,request.request_id,request.rating,time,serde_json::to_string(&card).map_err(error)?,serde_json::to_string(&next).map_err(error)?]).map_err(error)?;
-        put_card(&tx, &next)?;
-        let result = GradeResult {
-            card: next,
-            review_id,
-        };
-        remember(&tx, &request.request_id, "grade", &hash, &result)?;
-        tx.commit().map_err(error)?;
-        Ok(result)
+        self.repository_transaction(|db| {
+            if let Some(result) = cached(db, &request.request_id, "grade", &hash)? {
+                return Ok(result);
+            }
+            let card = get_card(db, &request.card_id)?;
+            if card.revision != request.expected_revision {
+                return Err("这张卡片已经更新或评分，请刷新复习队列。".into());
+            }
+            let entry = get_entry(db, &card.entry_id)?;
+            if card.suspended
+                || entry.deleted_at.is_some()
+                || entry.fields.meaning.trim().is_empty()
+                || card.due_at > time
+            {
+                return Err("这张卡片当前不在可复习队列中。".into());
+            }
+            let next = schedule(&card, &request.rating, time)?;
+            let review_id = uuid::Uuid::new_v4().to_string();
+            diesel::insert_into(r::table)
+                .values((
+                    r::id.eq(&review_id),
+                    r::card_id.eq(&card.id),
+                    r::request_id.eq(&request.request_id),
+                    r::rating.eq(&request.rating),
+                    r::reviewed_at.eq(time),
+                    r::before_state.eq(serde_json::to_string(&card).map_err(error)?),
+                    r::after_state.eq(serde_json::to_string(&next).map_err(error)?),
+                ))
+                .execute(db)
+                .map_err(error)?;
+            put_card(db, &next)?;
+            let result = GradeResult {
+                card: next,
+                review_id,
+            };
+            remember(db, &request.request_id, "grade", &hash, &result)?;
+            Ok(result)
+        })
     }
     pub fn vocabulary_review_undo(&self, request: &UndoRequest) -> Result<Card> {
         let hash = fingerprint(request)?;
-        let mut db = self.db.lock().unwrap();
-        let tx = db.transaction().map_err(error)?;
-        if let Some(id) = cached::<String>(&tx, &request.request_id, "undo", &hash)? {
-            return get_card(&tx, &id);
-        }
-        let recent:Option<(String,String,String)>=tx.query_row("SELECT id,before_state,after_state FROM vocabulary_reviews WHERE undone_at IS NULL ORDER BY reviewed_at DESC,rowid DESC LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(error)?;
-        let (id, before, after) = recent.ok_or("没有可以撤销的评分。")?;
-        if id != request.review_id {
-            return Err("只能撤销最近一次评分。".into());
-        }
-        let mut before: Card = serde_json::from_str(&before).map_err(error)?;
-        let after: Card = serde_json::from_str(&after).map_err(error)?;
-        let current = get_card(&tx, &before.id)?;
-        if current != after {
-            return Err("评分后卡片已有变化，不能覆盖较新的排程。".into());
-        }
-        before.revision = current.revision + 1;
-        put_card(&tx, &before)?;
-        tx.execute(
-            "UPDATE vocabulary_reviews SET undone_at=?2 WHERE id=?1",
-            params![id, now()],
-        )
-        .map_err(error)?;
-        remember(&tx, &request.request_id, "undo", &hash, &before.id)?;
-        tx.commit().map_err(error)?;
-        Ok(before)
+        self.repository_transaction(|db| {
+            if let Some(id) = cached::<String>(db, &request.request_id, "undo", &hash)? {
+                return get_card(db, &id);
+            }
+            let (id, before, after) = r::table
+                .filter(r::undone_at.is_null())
+                .order((r::reviewed_at.desc(), r::rowid.desc()))
+                .select((r::id, r::before_state, r::after_state))
+                .first::<(String, String, String)>(db)
+                .optional()
+                .map_err(error)?
+                .ok_or("没有可以撤销的评分。")?;
+            if id != request.review_id {
+                return Err("只能撤销最近一次评分。".into());
+            }
+            let mut before: Card = serde_json::from_str(&before).map_err(error)?;
+            let after: Card = serde_json::from_str(&after).map_err(error)?;
+            let current = get_card(db, &before.id)?;
+            if current != after {
+                return Err("评分后卡片已有变化，不能覆盖较新的排程。".into());
+            }
+            before.revision = current.revision + 1;
+            put_card(db, &before)?;
+            diesel::update(r::table.find(&id))
+                .set(r::undone_at.eq(now()))
+                .execute(db)
+                .map_err(error)?;
+            remember(db, &request.request_id, "undo", &hash, &before.id)?;
+            Ok(before)
+        })
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,6 +459,69 @@ mod tests {
         );
     }
     #[test]
+    fn equal_timestamp_reviews_undo_in_insertion_order() {
+        let storage = Storage::memory();
+        let (_, first) = fixture(&storage);
+        let (_, second) = fixture(&storage);
+        let time = now() + 1;
+        let older = storage
+            .grade_at(
+                &GradeRequest {
+                    request_id: id(),
+                    card_id: first.id.clone(),
+                    expected_revision: 1,
+                    rating: "remembered".into(),
+                },
+                time,
+            )
+            .unwrap();
+        let newer = storage
+            .grade_at(
+                &GradeRequest {
+                    request_id: id(),
+                    card_id: second.id.clone(),
+                    expected_revision: 1,
+                    rating: "remembered".into(),
+                },
+                time,
+            )
+            .unwrap();
+        let newer_id = "00000000-0000-4000-8000-000000000001";
+        storage
+            .repository(|db| {
+                diesel::update(r::table.find(&older.review_id))
+                    .set(r::id.eq("ffffffff-ffff-4fff-8fff-ffffffffffff"))
+                    .execute(db)
+                    .map_err(error)?;
+                diesel::update(r::table.find(&newer.review_id))
+                    .set(r::id.eq(newer_id))
+                    .execute(db)
+                    .map_err(error)?;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            storage
+                .review_queue_at(20, 5, time, time)
+                .unwrap()
+                .last_review_id
+                .as_deref(),
+            Some(newer_id)
+        );
+        let undone = storage
+            .vocabulary_review_undo(&UndoRequest {
+                request_id: id(),
+                review_id: newer_id.into(),
+            })
+            .unwrap();
+        assert_eq!(undone.id, second.id);
+        assert!(undone.last_reviewed_at.is_none());
+        assert_eq!(
+            storage.repository(|db| get_card(db, &first.id)).unwrap(),
+            older.card
+        );
+    }
+    #[test]
     fn queue_prioritizes_due_limits_new_cards_and_isolates_directions() {
         let storage = Storage::memory();
         let (entry, card) = fixture(&storage);
@@ -447,7 +556,7 @@ mod tests {
         assert_eq!(queue.due_count, 1);
         assert_eq!(queue.new_count, 8);
         assert_eq!(
-            get_card(&storage.db.lock().unwrap(), &production.id)
+            get_card(&mut storage.db.lock().unwrap(), &production.id)
                 .unwrap()
                 .revision,
             1
@@ -506,15 +615,9 @@ mod tests {
                 "purge",
             )
             .unwrap();
-        let db = storage.db.lock().unwrap();
-        for table in ["vocabulary_cards", "vocabulary_reviews"] {
-            assert_eq!(
-                db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
-                    .get::<_, i64>(0))
-                    .unwrap(),
-                0
-            )
-        }
+        let mut db = storage.db.lock().unwrap();
+        assert_eq!(c::table.count().get_result::<i64>(&mut *db).unwrap(), 0);
+        assert_eq!(r::table.count().get_result::<i64>(&mut *db).unwrap(), 0);
     }
     #[test]
     fn tags_normalize_and_revision_protect_edits() {

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-backend-save-profile"
+description = "Enables the backend_save_profile command without any pre-configured scope."
+commands.allow = ["backend_save_profile"]
+
+[[permission]]
+identifier = "deny-backend-save-profile"
+description = "Denies the backend_save_profile command without any pre-configured scope."
+commands.deny = ["backend_save_profile"]

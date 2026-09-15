@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { useChatStore } from '../chat/store'
 import { useVocabularyStore } from './store'
+import { sourceLabel } from './sourceLabel'
 import LearningControls from './LearningControls.vue'
 const vocabulary = useVocabularyStore()
+const chat = useChatStore()
 const confirmPurge = ref(false)
 watch(
   () => vocabulary.selected?.id,
@@ -32,13 +35,7 @@ watch(
         :key="source.id"
         class="word-source"
       >
-        <span class="overline">{{
-          source.sourceKind === 'terminal'
-            ? 'Codex 终端'
-            : source.sourceKind === 'import'
-              ? '导入材料'
-              : '对话原句'
-        }}</span>
+        <span class="overline">{{ sourceLabel(source) }}</span>
         <blockquote dir="auto">{{ source.snapshot }}</blockquote>
         <small
           >{{ source.truncated ? '来源片段 · ' : ''
@@ -46,6 +43,14 @@ watch(
             source.conversationId || source.threadId ? '已保留原句快照' : '来源未关联，原句仍可查看'
           }}</small
         >
+        <button
+          v-if="source.conversationId && source.messageId"
+          class="text-button"
+          :disabled="chat.navigating || chat.closing"
+          @click="chat.selectConversation(source.conversationId, source.messageId)"
+        >
+          查看原消息
+        </button>
       </article>
     </section>
     <p v-else class="settings-help">手动添加的词句，没有来源原句。</p>

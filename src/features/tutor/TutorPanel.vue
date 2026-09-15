@@ -2,8 +2,10 @@
 import { computed, ref, toRef } from 'vue'
 import AppIcon from '../../shared/AppIcon.vue'
 import MessageList from '../codex/MessageList.vue'
-import { useCodexStore } from '../codex/store'
-const codex = useCodexStore()
+import ImportedContext from '../chat/ImportedContext.vue'
+import { useChatStore } from '../chat/store'
+import { tutorPlaceholders } from '../../shared/tutor-placeholders'
+const codex = useChatStore()
 const lane = codex.lanes.tutor
 import type { IconName } from '../../shared/AppIcon.vue'
 
@@ -23,7 +25,7 @@ const modes: {
     label: '怎么说',
     icon: 'chat',
     description: '先用母语说出想法，一起找到自然的表达。',
-    placeholder: '我想表达……，怎么说更自然？',
+    placeholder: tutorPlaceholders.express,
     examples: ['“我最近迷上了……”怎么说？', '怎样礼貌地表达不同意见？'],
   },
   {
@@ -31,7 +33,7 @@ const modes: {
     label: '解释',
     icon: 'quote',
     description: '从词义到句子结构，把不确定的地方弄明白。',
-    placeholder: '粘贴你想理解的词语或句子…',
+    placeholder: tutorPlaceholders.explain,
     examples: ['这个词在不同语境中有什么区别？', '帮我拆解这句话的语法结构。'],
   },
   {
@@ -39,7 +41,7 @@ const modes: {
     label: '翻译',
     icon: 'translate',
     description: '用母语理解句意，也看看更地道的说法。',
-    placeholder: '粘贴需要翻译的句子…',
+    placeholder: tutorPlaceholders.translate,
     examples: ['帮我翻译这句话，并解释语气。', '这句话直译和自然表达有什么区别？'],
   },
 ]
@@ -49,7 +51,7 @@ function fillDraft(text: string) {
   input.value?.focus()
 }
 async function send() {
-  if (!draft.value.trim() || lane.busy || !codex.ready) return
+  if (!draft.value.trim() || lane.busy || !codex.isReady('tutor')) return
   const text = draft.value
   await codex.send('tutor', text, activeMode.value)
 }
@@ -68,7 +70,7 @@ function onKeydown(event: KeyboardEvent) {
       <h2 id="tutor-title">语言助手</h2>
       <button
         class="text-button"
-        :disabled="lane.busy || !codex.initialized"
+        :disabled="lane.busy || !codex.initialized || codex.navigating"
         @click="codex.reset('tutor')"
       >
         重置
@@ -86,6 +88,7 @@ function onKeydown(event: KeyboardEvent) {
       </button>
     </div>
     <div class="tutor-scroll scroll-region" tabindex="0" aria-label="语言辅导内容">
+      <ImportedContext :messages="lane.context" />
       <MessageList
         pane="tutor"
         v-if="lane.messages.length"
@@ -127,7 +130,9 @@ function onKeydown(event: KeyboardEvent) {
           <span>用母语问，也没关系</span
           ><button
             class="send-button"
-            :disabled="!lane.busy && (!codex.ready || !draft.trim() || !codex.tutorModel)"
+            :disabled="
+              !lane.busy && (!codex.isReady('tutor') || !draft.trim() || !codex.tutorModel)
+            "
             :aria-label="lane.busy ? '停止辅导回复' : '发送辅导问题'"
             @click="lane.busy ? codex.stop('tutor') : send()"
           >
@@ -137,7 +142,7 @@ function onKeydown(event: KeyboardEvent) {
       </div>
       <p v-if="lane.error" class="inline-error" role="alert">{{ lane.error }}</p>
       <p id="tutor-status" class="composer-caption">
-        {{ codex.ready ? codex.tutorModel : '辅导模型尚未连接' }}
+        {{ codex.isReady('tutor') ? codex.tutorModel : codex.paneLabel('tutor') }}
       </p>
     </div>
   </section>

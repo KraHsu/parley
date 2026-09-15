@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { toRef, watch } from 'vue'
 import { useVocabularyStore } from './store'
-import { useCodexStore } from '../codex/store'
+import { useChatStore } from '../chat/store'
 import ReviewPanel from './ReviewPanel.vue'
 import VocabularyExchange from './VocabularyExchange.vue'
 import VocabularyList from './VocabularyList.vue'
 import VocabularyDetail from './VocabularyDetail.vue'
 defineProps<{ companion?: boolean }>()
 const vocabulary = useVocabularyStore()
-const codex = useCodexStore()
+const codex = useChatStore()
 const view = toRef(vocabulary, 'activeTab')
 watch(view, (tab) => {
   if (tab === 'words' && vocabulary.selected) void vocabulary.open(vocabulary.selected.id)

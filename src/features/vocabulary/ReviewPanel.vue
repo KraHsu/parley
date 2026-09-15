@@ -2,10 +2,10 @@
 import { computed, ref, watch } from 'vue'
 import { wordInvoke as invoke } from '../../shared/word-operations'
 import { useVocabularyStore } from './store'
-import { useCodexStore } from '../codex/store'
+import { useChatStore } from '../chat/store'
 import type { ReviewCard, ReviewQueue, ReviewItem } from './types'
 const vocabulary = useVocabularyStore()
-const codex = useCodexStore()
+const codex = useChatStore()
 const items = ref<ReviewItem[]>([])
 const stats = ref<ReviewQueue | null>(null)
 const limit = ref(20)
@@ -128,7 +128,7 @@ async function undo() {
   }
 }
 async function practice() {
-  if (!current.value || !codex.ready || codex.lanes.tutor.busy) return
+  if (!current.value || !codex.isReady('tutor') || codex.lanes.tutor.busy) return
   const fields = current.value.entry
   vocabulary.tutorFocusRequest++
   codex.mobilePane = 'tutor'
@@ -202,7 +202,7 @@ async function practice() {
         </div>
         <button
           class="text-button"
-          :disabled="!codex.ready || codex.lanes.tutor.busy"
+          :disabled="!codex.isReady('tutor') || codex.lanes.tutor.busy"
           @click="practice"
         >
           请助手给一个表达练习

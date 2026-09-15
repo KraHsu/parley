@@ -1,6 +1,7 @@
-//! Launch the user's unchanged Codex TUI alongside the grammar GUI.
+//! Launch the user's official native CLI alongside the grammar GUI.
 use crate::storage::Preferences;
-use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use crate::storage::schema::preferences as pref;
+use diesel::prelude::*;
 use serde::Serialize;
 use std::{
     ffi::OsString,
@@ -24,6 +25,35 @@ pub(crate) fn codex_command(binary: &Path) -> Command {
     command
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TerminalBackend {
+    #[default]
+    Codex,
+    ClaudeCode,
+}
+impl TerminalBackend {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "codex" => Ok(Self::Codex),
+            "claude-code" => Ok(Self::ClaudeCode),
+            _ => Err("--backend 只能选择 codex 或 claude-code。".into()),
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Self::Codex => "Codex",
+            Self::ClaudeCode => "Claude Code",
+        }
+    }
+    fn key(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::ClaudeCode => "claude-code",
+        }
+    }
+}
+
 #[derive(Default, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchOptions {
@@ -31,6 +61,9 @@ pub struct LaunchOptions {
     pub codex_path: Option<String>,
     pub terminal_cwd: Option<String>,
     pub terminal_started_at: u64,
+    pub terminal_backend: TerminalBackend,
+    #[serde(skip)]
+    pub terminal_ready: Option<PathBuf>,
 }
 impl LaunchOptions {
     pub fn from_environment() -> Self {
@@ -41,6 +74,13 @@ impl LaunchOptions {
                 "--tutor-only" => result.tutor_only = true,
                 "--codex-path" => result.codex_path = args.next(),
                 "--terminal-cwd" => result.terminal_cwd = args.next(),
+                "--terminal-backend" => {
+                    result.terminal_backend = args
+                        .next()
+                        .and_then(|v| TerminalBackend::parse(&v).ok())
+                        .unwrap_or_default()
+                }
+                "--terminal-ready" => result.terminal_ready = args.next().map(PathBuf::from),
                 "--terminal-started-at" => {
                     result.terminal_started_at =
                         args.next().and_then(|v| v.parse().ok()).unwrap_or(0)
@@ -58,6 +98,8 @@ pub fn get_launch_options(options: tauri::State<'_, LaunchOptions>) -> LaunchOpt
 
 #[derive(Debug, Default)]
 struct CliOptions {
+    backend: TerminalBackend,
+    claude: Option<PathBuf>,
     codex: Option<PathBuf>,
     gui: Option<PathBuf>,
     no_gui: bool,
@@ -69,6 +111,17 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<CliOptions, String>
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.to_str() {
+            Some("--backend") => {
+                options.backend = TerminalBackend::parse(
+                    args.next()
+                        .ok_or("--backend 需要后端名称")?
+                        .to_str()
+                        .ok_or("后端名称无效")?,
+                )?
+            }
+            Some("--claude") => {
+                options.claude = Some(args.next().ok_or("--claude 需要绝对路径")?.into())
+            }
             Some("--codex") => {
                 options.codex = Some(args.next().ok_or("--codex 需要绝对路径")?.into())
             }
@@ -88,6 +141,14 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<CliOptions, String>
             }
         }
     }
+    if (options.backend == TerminalBackend::Codex && options.claude.is_some())
+        || (options.backend == TerminalBackend::ClaudeCode && options.codex.is_some())
+    {
+        return Err(
+            "CLI 路径参数与 --backend 不匹配。Claude 请使用 --backend claude-code --claude PATH。"
+                .into(),
+        );
+    }
     Ok(options)
 }
 fn data_file() -> Result<PathBuf, String> {
@@ -100,12 +161,14 @@ fn saved_codex(path: &Path) -> Result<PathBuf, String> {
         return Err("请先在 Parley 设置中填写 Codex 路径，或使用 --codex /完整路径/codex。".into());
     }
     // Read existing settings without migrations, writer locks or changing the workspace.
-    let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|e| e.to_string())?;
-    let value: Option<String> = db
-        .query_row("SELECT value FROM preferences WHERE id=1", [], |row| {
-            row.get(0)
-        })
+    let absolute = path.canonicalize().map_err(|e| e.to_string())?;
+    let mut uri = url::Url::from_file_path(absolute).map_err(|_| "数据路径无效。")?;
+    uri.set_query(Some("mode=ro"));
+    let mut db = SqliteConnection::establish(uri.as_str()).map_err(|e| e.to_string())?;
+    let value = pref::table
+        .find(1_i64)
+        .select(pref::value)
+        .first::<String>(&mut db)
         .optional()
         .map_err(|e| format!("读取 Codex 路径失败：{e}"))?;
     let preferences: Preferences =
@@ -115,10 +178,42 @@ fn saved_codex(path: &Path) -> Result<PathBuf, String> {
     }
     Ok(PathBuf::from(preferences.codex_path.trim()))
 }
+fn saved_claude(path: &Path) -> Result<PathBuf, String> {
+    use crate::{
+        backends::types::{BackendKind, ProfileConfig},
+        storage::schema::backend_profiles as profiles,
+    };
+    let absolute = path
+        .canonicalize()
+        .map_err(|_| "请使用 --claude 指定 Claude Code 路径，或先在设置中保存配置。")?;
+    let mut uri = url::Url::from_file_path(absolute).map_err(|_| "数据路径无效")?;
+    uri.set_query(Some("mode=ro"));
+    let mut db = SqliteConnection::establish(uri.as_str())
+        .map_err(|_| "无法读取后端配置，请使用 --claude 指定路径。")?;
+    let rows = profiles::table
+        .select(profiles::config)
+        .load::<String>(&mut db)
+        .map_err(|_| "无法读取后端配置，请使用 --claude 指定路径。")?;
+    let mut paths = rows
+        .into_iter()
+        .filter_map(|v| serde_json::from_str::<ProfileConfig>(&v).ok())
+        .filter(|p| p.kind == BackendKind::ClaudeCode && p.enabled && !p.binary_path.is_empty())
+        .map(|p| PathBuf::from(p.binary_path))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    if paths.len() != 1 {
+        return Err(
+            "未找到唯一的 Claude Code 路径，请使用 --claude /完整路径/claude 指定。".into(),
+        );
+    }
+    Ok(paths.remove(0))
+}
+
 fn validate_binary(path: &Path) -> Result<(), String> {
     if !path.is_absolute() || !path.is_file() {
         return Err(format!(
-            "请指定存在的 Codex 可执行文件绝对路径：{}",
+            "请指定存在的 CLI 可执行文件绝对路径：{}",
             path.display()
         ));
     }
@@ -145,7 +240,13 @@ fn gui_running(path: &Path) -> bool {
         .open(path.with_extension("lock"))
         .is_ok_and(|file| file.try_lock().is_err())
 }
-fn start_gui(gui: &Path, codex: &Path, cwd: &Path) -> Result<(), String> {
+fn start_gui(
+    gui: &Path,
+    binary: &Path,
+    cwd: &Path,
+    backend: TerminalBackend,
+    ready: Option<&Path>,
+) -> Result<std::process::Child, String> {
     if !gui.is_file() {
         return Err(format!(
             "未找到语法助手程序：{}。请先运行 npm run cli:build。",
@@ -155,8 +256,8 @@ fn start_gui(gui: &Path, codex: &Path, cwd: &Path) -> Result<(), String> {
     let mut command = Command::new(gui);
     command
         .arg("--tutor-only")
-        .arg("--codex-path")
-        .arg(codex)
+        .arg("--terminal-backend")
+        .arg(backend.key())
         .arg("--terminal-cwd")
         .arg(cwd)
         .arg("--terminal-started-at")
@@ -170,6 +271,12 @@ fn start_gui(gui: &Path, codex: &Path, cwd: &Path) -> Result<(), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    if backend == TerminalBackend::Codex {
+        command.arg("--codex-path").arg(binary);
+    }
+    if let Some(ready) = ready {
+        command.arg("--terminal-ready").arg(ready);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -182,8 +289,7 @@ fn start_gui(gui: &Path, codex: &Path, cwd: &Path) -> Result<(), String> {
     }
     command
         .spawn()
-        .map_err(|e| format!("无法启动语法助手：{e}"))?;
-    Ok(())
+        .map_err(|e| format!("无法启动语法助手：{e}"))
 }
 fn terminal_cwd(args: &[OsString]) -> Result<PathBuf, String> {
     let mut cwd = std::env::current_dir().map_err(|e| e.to_string())?;
@@ -206,33 +312,91 @@ fn terminal_cwd(args: &[OsString]) -> Result<PathBuf, String> {
     Ok(cwd.canonicalize().unwrap_or(cwd))
 }
 fn run(options: CliOptions) -> Result<i32, String> {
-    let codex = match options.codex {
-        Some(path) => path,
-        None => saved_codex(&data_file()?)?,
-    };
-    validate_binary(&codex)?;
+    let backend = options.backend;
+    let binary = match backend {
+        TerminalBackend::Codex => options
+            .codex
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(|| saved_codex(&data_file()?)),
+        TerminalBackend::ClaudeCode => options
+            .claude
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(|| saved_claude(&data_file()?)),
+    }?;
+    validate_binary(&binary)?;
     let current = std::env::current_exe().map_err(|e| e.to_string())?;
-    if codex.canonicalize().ok() == current.canonicalize().ok() {
-        return Err("Codex 路径不能指向 Parley 启动器自身。".into());
+    if binary.canonicalize().ok() == current.canonicalize().ok() {
+        return Err("CLI 路径不能指向 Parley 启动器自身。".into());
     }
+    let mut plugin = None;
     if !options.no_gui {
-        let already_running = data_file().is_ok_and(|path| gui_running(&path));
-        if already_running {
-            return Err("Parley 工作区已经打开。请先正常关闭已有窗口，再启动终端伴随模式；只启动 Codex 可使用 --no-gui。".into());
+        if data_file().is_ok_and(|path| gui_running(&path)) {
+            return Err("Parley 工作区已经打开。请先正常关闭已有窗口，再启动终端伴随模式；只启动官方 CLI 可使用 --no-gui。".into());
         }
-        {
-            let gui = options.gui.unwrap_or_else(|| {
-                current.with_file_name(if cfg!(windows) {
-                    "parley.exe"
-                } else {
-                    "parley"
-                })
-            });
-            start_gui(&gui, &codex, &terminal_cwd(&options.args)?)?;
+        let gui = options.gui.unwrap_or_else(|| {
+            current.with_file_name(if cfg!(windows) {
+                "parley.exe"
+            } else {
+                "parley"
+            })
+        });
+        let cwd = if backend == TerminalBackend::Codex {
+            terminal_cwd(&options.args)?
+        } else {
+            std::env::current_dir().map_err(|e| e.to_string())?
+        };
+        let ready = if backend == TerminalBackend::ClaudeCode {
+            Some(
+                tempfile::Builder::new()
+                    .prefix("parley-ready-")
+                    .tempfile()
+                    .map_err(|e| e.to_string())?,
+            )
+        } else {
+            None
+        };
+        let mut child = start_gui(
+            &gui,
+            &binary,
+            &cwd,
+            backend,
+            ready.as_ref().map(|f| f.path()),
+        )?;
+        if let Some(ready) = ready {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            while std::time::Instant::now() < deadline {
+                if let Ok(bytes) = std::fs::read(ready.path())
+                    && bytes.len() <= 8192
+                    && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
+                {
+                    plugin = value["pluginPath"]
+                        .as_str()
+                        .map(PathBuf::from)
+                        .filter(|p| p.is_absolute() && p.join("hooks/hooks.json").is_file());
+                    if plugin.is_some() {
+                        break;
+                    }
+                }
+                if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            let _ = ready.close();
+            if plugin.is_none() {
+                eprintln!(
+                    "Parley 自动同步接收器未就绪；Claude Code 仍可正常使用。请检查语法窗口中的同步状态。"
+                );
+            }
         }
     }
-    let mut command = codex_command(&codex);
-    // No prompt/config injection, cwd change, pipe, token handling, or output parsing.
+    let mut command = codex_command(&binary);
+    if let Some(plugin) = plugin {
+        command.arg("--plugin-dir").arg(plugin);
+    }
+    // The official CLI owns the terminal, login, settings, signals and native UI.
     command
         .args(options.args)
         .stdin(Stdio::inherit())
@@ -241,13 +405,13 @@ fn run(options: CliOptions) -> Result<i32, String> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        Err(format!("无法启动 Codex：{}", command.exec()))
+        Err(format!("无法启动 {}：{}", backend.name(), command.exec()))
     }
     #[cfg(not(unix))]
     {
         let status = command
             .status()
-            .map_err(|e| format!("无法启动 Codex：{e}"))?;
+            .map_err(|e| format!("无法启动 {}：{e}", backend.name()))?;
         Ok(status.code().unwrap_or(1))
     }
 }
@@ -261,7 +425,7 @@ pub fn run_cli() -> i32 {
     };
     if options.help {
         println!(
-            "Parley — 官方 Codex TUI + 语法助手 GUI\n\n用法：parley-cli [--codex PATH] [--no-gui] [--gui-bin PATH] [-- CODEX_ARGS...]\n\n默认读取 Parley 设置中的 Codex 路径，并打开语法助手窗口。\nCodex 参数从 -- 之后或第一个非 Parley 参数开始原样传递。\n\n示例：\n  parley-cli\n  parley-cli --codex /path/to/codex\n  parley-cli -- resume --last\n  parley-cli -- -m MODEL\n  parley-cli --no-gui -- --help\n\n关闭语法窗口不会结束终端会话；退出 Codex 后仍可继续使用语法窗口。"
+            "Parley — 官方 Codex / Claude Code TUI + 语法助手 GUI\n\n用法：parley-cli [--backend codex|claude-code] [--codex PATH|--claude PATH] [--no-gui] [--gui-bin PATH] [-- NATIVE_ARGS...]\n\n默认运行 Codex。CLI 路径读取设置，或通过参数显式指定。原生参数从 -- 之后或第一个非 Parley 参数开始原样传递。\n\n示例：\n  parley-cli\n  parley-cli --codex /path/to/codex -- resume --last\n  parley-cli --backend claude-code --claude /path/to/claude -- --resume SESSION_ID\n  parley-cli --backend claude-code --no-gui -- --help\n\nClaude 自动同步通过本次启动的局部 hooks 插件接收新轮次。关闭语法窗口不会结束终端会话。"
         );
         return 0;
     }
@@ -277,6 +441,7 @@ pub fn run_cli() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use diesel::connection::SimpleConnection;
     #[test]
     #[cfg(unix)]
     fn selected_shim_finds_its_sibling_runtime_without_shell_startup() {
@@ -290,11 +455,117 @@ mod tests {
         for path in [&binary, &runtime] {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let output = codex_command(&binary).output().unwrap();
+        // Parallel subprocess tests can briefly inherit a just-written script's
+        // descriptor before exec closes it, producing ETXTBSY on Linux. No child
+        // starts in this case; wait only for that transient fixture condition.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let output = loop {
+            match codex_command(&binary).output() {
+                Err(error)
+                    if error.raw_os_error() == Some(libc::ETXTBSY)
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                result => break result.unwrap(),
+            }
+        };
         assert!(output.status.success());
         assert_eq!(output.stdout, b"runtime found\n");
         std::fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn saved_claude_requires_one_distinct_enabled_binary() {
+        use crate::{
+            backends::types::{BackendKind, ProfileConfig, Provider, SaveProfile},
+            storage::Storage,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workspace.sqlite3");
+        let storage = Storage::open(&path).unwrap();
+        assert!(saved_claude(&path).is_err());
+        let first = dir.path().join("claude").to_str().unwrap().to_owned();
+        let second = dir.path().join("other-claude").to_str().unwrap().to_owned();
+        for (name, binary, enabled) in [
+            ("one", first.as_str(), true),
+            ("same", first.as_str(), true),
+            ("disabled", second.as_str(), false),
+        ] {
+            storage
+                .save_backend_profile(SaveProfile {
+                    id: None,
+                    expected_revision: None,
+                    config: ProfileConfig {
+                        name: name.into(),
+                        kind: BackendKind::ClaudeCode,
+                        provider: Provider::Anthropic,
+                        endpoint: "".into(),
+                        binary_path: binary.into(),
+                        enabled,
+                    },
+                })
+                .unwrap();
+        }
+        assert_eq!(saved_claude(&path).unwrap(), PathBuf::from(first));
+        storage
+            .save_backend_profile(SaveProfile {
+                id: None,
+                expected_revision: None,
+                config: ProfileConfig {
+                    name: "other".into(),
+                    kind: BackendKind::ClaudeCode,
+                    provider: Provider::Anthropic,
+                    endpoint: "".into(),
+                    binary_path: second,
+                    enabled: true,
+                },
+            })
+            .unwrap();
+        assert!(saved_claude(&path).is_err());
+    }
+
+    #[test]
+    fn backend_selection_preserves_native_settings_and_arguments() {
+        let options = parse(
+            [
+                "--backend",
+                "claude-code",
+                "--claude",
+                "/path/claude",
+                "--",
+                "--settings",
+                "/my/settings.json",
+                "--plugin-dir",
+                "/existing/plugin",
+                "--resume",
+                "explicit-session",
+                "prompt `$(literal)`",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap();
+        assert_eq!(options.backend, TerminalBackend::ClaudeCode);
+        assert_eq!(options.claude, Some(PathBuf::from("/path/claude")));
+        assert_eq!(
+            options.args,
+            [
+                "--settings",
+                "/my/settings.json",
+                "--plugin-dir",
+                "/existing/plugin",
+                "--resume",
+                "explicit-session",
+                "prompt `$(literal)`"
+            ]
+            .map(OsString::from)
+        );
+        assert!(parse(["--backend", "unknown"].map(OsString::from)).is_err());
+        assert!(
+            parse(["--backend", "claude-code", "--codex", "/path/codex"].map(OsString::from))
+                .is_err()
+        );
+    }
+
     #[test]
     fn arguments_are_forwarded_without_shell_interpretation_or_config_injection() {
         let options = parse(
@@ -331,19 +602,22 @@ mod tests {
     fn reads_user_selection_without_changing_preferences() {
         let path =
             std::env::temp_dir().join(format!("parley-launcher-{}.sqlite3", std::process::id()));
-        let db = Connection::open(&path).unwrap();
-        db.execute_batch("CREATE TABLE preferences(id INTEGER PRIMARY KEY, value TEXT)")
+        let mut db = SqliteConnection::establish(path.to_str().unwrap()).unwrap();
+        db.batch_execute("CREATE TABLE preferences(id INTEGER PRIMARY KEY, value TEXT)")
             .unwrap();
         let value = r#"{"codexPath":"/My Tools/codex","targetLanguage":"ja"}"#;
-        db.execute("INSERT INTO preferences VALUES(1, ?1)", [value])
+        diesel::insert_into(pref::table)
+            .values((pref::id.eq(1_i64), pref::value.eq(value)))
+            .execute(&mut db)
             .unwrap();
         assert_eq!(
             saved_codex(&path).unwrap(),
             PathBuf::from("/My Tools/codex")
         );
         assert_eq!(
-            db.query_row("SELECT value FROM preferences", [], |row| row
-                .get::<_, String>(0))
+            pref::table
+                .select(pref::value)
+                .first::<String>(&mut db)
                 .unwrap(),
             value
         );

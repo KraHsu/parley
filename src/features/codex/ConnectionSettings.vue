@@ -1,10 +1,23 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useCodexStore } from './store'
-defineProps<{ tutorOnly?: boolean }>()
-const codex = useCodexStore()
+import { useChatStore } from '../chat/store'
+import { useCodexConnectionsStore } from './connections'
+import type { BackendProfile } from '../backends/types'
+const props = defineProps<{ tutorOnly?: boolean; profile?: BackendProfile }>()
+const chat = useChatStore()
+const connections = useCodexConnectionsStore()
+const profileId = computed(() => props.profile?.id ?? 'codex-default')
+const codex = computed(() =>
+  props.profile
+    ? {
+        ...connections.get(props.profile.id),
+        initialized: chat.initialized,
+        connect: () => chat.connectCodexProfile(props.profile!.id),
+      }
+    : chat,
+)
 const windows = computed(() => {
-  const limit = codex.limits?.rateLimits
+  const limit = codex.value.limits?.rateLimits
   return [limit?.primary, limit?.secondary].filter((item) => item != null)
 })
 function duration(minutes: number | null) {
@@ -18,15 +31,19 @@ function duration(minutes: number | null) {
 <template>
   <section class="settings-section codex-settings">
     <h3>
-      Codex 连接 <span class="subtle-label">{{ codex.label }}</span>
+      {{ profile?.config.name ?? 'Codex 连接' }} <span class="subtle-label">{{ codex.label }}</span>
     </h3>
     <p class="settings-help">
-      连接时自动读取本机 Codex 已有的登录状态。两处对话使用你的 ChatGPT 账号及其 Codex 额度。
+      连接时自动读取本机 Codex 已有的登录状态。选用 Codex 的对话使用你的 ChatGPT 账号及其 Codex
+      额度。
     </p>
-    <label class="settings-field codex-path-field">
+    <p v-if="profile" class="settings-help">
+      {{ profile.config.binaryPath || '请先编辑配置，填写 Codex 路径。' }}
+    </p>
+    <label v-else class="settings-field codex-path-field">
       Codex 可执行文件路径
       <input
-        v-model="codex.codexPath"
+        v-model="chat.codexPath"
         type="text"
         placeholder="粘贴你安装的 Codex 的绝对路径"
         :disabled="codex.connected || codex.connecting || !codex.initialized"
@@ -35,7 +52,7 @@ function duration(minutes: number | null) {
         aria-describedby="codex-path-help"
       />
     </label>
-    <p id="codex-path-help" class="settings-help">
+    <p v-if="!profile" id="codex-path-help" class="settings-help">
       macOS / Linux：在终端运行 <code>command -v codex</code>，复制完整路径。 Windows：填写
       <code>codex.exe</code> 的完整路径。路径会自动保存；更换前请先断开连接。
     </p>
@@ -49,7 +66,7 @@ function duration(minutes: number | null) {
       <button
         v-if="!codex.connected"
         class="primary-button"
-        :disabled="codex.connecting"
+        :disabled="codex.connecting || (profile && !profile.config.enabled)"
         @click="codex.connect"
       >
         {{ codex.connecting ? '连接中…' : '连接本机 Codex' }}
@@ -78,6 +95,9 @@ function duration(minutes: number | null) {
         </button>
         <button class="secondary-button" @click="codex.disconnect">断开连接</button>
       </template>
+      <button v-if="codex.connecting" class="secondary-button" @click="codex.disconnect">
+        取消连接
+      </button>
     </div>
     <div v-if="codex.login" class="login-pending">
       <p>请在浏览器中完成 OpenAI 登录。若已完成，可点击“读取本机登录 / 刷新”。</p>
@@ -88,28 +108,30 @@ function duration(minutes: number | null) {
     <p v-if="codex.notice" class="settings-help" role="status">{{ codex.notice }}</p>
     <p v-if="codex.limitsError" class="settings-help" role="status">{{ codex.limitsError }}</p>
     <template v-if="codex.account?.type === 'chatgpt' && codex.models.length">
-      <label v-if="!tutorOnly" class="settings-field"
-        >对话模型<select v-model="codex.mainModel" :disabled="codex.lanes.main.busy">
+      <label
+        v-if="!tutorOnly && chat.lanes.main.backend.profileId === profileId"
+        class="settings-field"
+        >对话模型<select v-model="chat.mainModel" :disabled="chat.lanes.main.busy">
           <option
-            v-if="codex.mainModel && !codex.models.some((m) => m.model === codex.mainModel)"
-            :value="codex.mainModel"
+            v-if="chat.mainModel && !codex.models.some((m) => m.model === chat.mainModel)"
+            :value="chat.mainModel"
             disabled
           >
-            {{ codex.mainModel }}（当前不可用）
+            {{ chat.mainModel }}（当前不可用）
           </option>
           <option v-for="model in codex.models" :key="model.id" :value="model.model">
             {{ model.displayName }}
           </option>
         </select></label
       >
-      <label class="settings-field"
-        >辅导模型<select v-model="codex.tutorModel" :disabled="codex.lanes.tutor.busy">
+      <label v-if="chat.lanes.tutor.backend.profileId === profileId" class="settings-field"
+        >辅导模型<select v-model="chat.tutorModel" :disabled="chat.lanes.tutor.busy">
           <option
-            v-if="codex.tutorModel && !codex.models.some((m) => m.model === codex.tutorModel)"
-            :value="codex.tutorModel"
+            v-if="chat.tutorModel && !codex.models.some((m) => m.model === chat.tutorModel)"
+            :value="chat.tutorModel"
             disabled
           >
-            {{ codex.tutorModel }}（当前不可用）
+            {{ chat.tutorModel }}（当前不可用）
           </option>
           <option v-for="model in codex.models" :key="model.id" :value="model.model">
             {{ model.displayName }}
@@ -133,6 +155,9 @@ function duration(minutes: number | null) {
         >
       </div>
     </template>
+    <p v-if="profile" class="settings-help">
+      此配置单独管理连接与会话，登录仍由所选 CLI 管理；使用同一本机登录目录的配置会共享账号。
+    </p>
     <p class="settings-help">断开不会退出本机账号。会话和设置保存在本机，重新连接后可继续。</p>
   </section>
 </template>

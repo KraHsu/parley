@@ -1,5 +1,7 @@
 # Parley 开发计划
 
+下一阶段：按照 [多模型后端开发计划](MULTI_BACKEND_PLAN.md) 扩展主流模型 API、Codex 和 Claude Code，让主聊与语言助手独立选择后端。该计划基于 v0.3.0，正在开发；下方保留早期 Codex 首版路线，不代表未来只能使用 Codex。
+
 状态：M0 已完成，M1/M2 的连接与双会话、M3 的工作区持久化已实现首版；官方 Codex TUI + 独立语法 GUI 及自动上下文已发布为 v0.1.0 Linux 预览版。词句收藏、注释与离线复习已实现，详细范围和验收以 [词句学习开发计划](VOCABULARY_PLAN.md) 为准。下方保留全产品里程碑，未完成项继续按验收推进；当前数据与接入能力见 [持久化说明](PERSISTENCE.md) 和 [Codex 接入说明](CODEX_INTEGRATION.md)。
 
 ## 1. 产品目标与边界

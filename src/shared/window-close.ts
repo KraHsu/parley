@@ -24,7 +24,7 @@ export async function closeWorkspace(actions: CloseActions, discard = false) {
     if (!saved) throw new Error('草稿未能保存，请重试，或关闭并放弃未保存修改。')
   }
   try {
-    await within(actions.disconnect, 12000, 'Codex 未能及时退出，请重试或强制关闭。')
+    await within(actions.disconnect, 12000, '模型后端未能及时退出，请重试或强制关闭。')
   } catch (error) {
     if (!discard) throw error
   }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-backend-disconnect"
+description = "Enables the backend_disconnect command without any pre-configured scope."
+commands.allow = ["backend_disconnect"]
+
+[[permission]]
+identifier = "deny-backend-disconnect"
+description = "Denies the backend_disconnect command without any pre-configured scope."
+commands.deny = ["backend_disconnect"]

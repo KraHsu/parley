@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useCodexStore, type Conversation } from './store'
+import { useBackendStore } from '../backends/store'
+import type { TurnEvent } from '../backends/types'
+import { useCodexConnectionsStore } from './connections'
 import { useSettingsStore } from '../settings/store'
 const mock = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -81,6 +84,49 @@ beforeEach(() => {
 const emit = (method: string, params: unknown, index = 0) =>
   mock.callbacks[index]!.onmessage({ method, params })
 describe('Codex workspace', () => {
+  it('ignores an old conversation event after switching the pane', async () => {
+    const store = useCodexStore()
+    await store.connect()
+    emit('item/agentMessage/delta', {
+      pane: 'main',
+      conversationId: 'different-conversation',
+      itemId: 'late',
+      delta: 'wrong answer',
+    })
+    expect(store.lanes.main.messages).toEqual([])
+    emit('item/completed', {
+      pane: 'main',
+      conversationId: 'main',
+      item: { id: 'final', text: 'saved answer' },
+    })
+    emit('item/agentMessage/delta', {
+      pane: 'main',
+      conversationId: 'main',
+      itemId: 'final',
+      delta: 'duplicate tail',
+    })
+    expect(store.lanes.main.messages[0]?.text).toBe('saved answer')
+  })
+  it('Codex disconnect leaves a different backend lane untouched', async () => {
+    const store = useCodexStore()
+    await store.connect()
+    store.lanes.tutor.backend = {
+      profileId: 'independent-api',
+      profileRevision: 1,
+      kind: 'openai_responses',
+    }
+    store.lanes.tutor.busy = true
+    store.lanes.tutor.messages.push({
+      id: 'api-answer',
+      role: 'assistant',
+      text: 'partial',
+      status: 'streaming',
+    })
+    emit('connection/closed', { message: 'Codex exited' })
+    expect(store.lanes.tutor.busy).toBe(true)
+    expect(store.lanes.tutor.messages[0]?.status).toBe('streaming')
+    expect(store.lanes.tutor.error).toBe('')
+  })
   it('binds late vocabulary answers to the draft version captured when sending', async () => {
     const store = useCodexStore()
     await store.connect()
@@ -199,7 +245,7 @@ describe('Codex workspace', () => {
     store.terminalContext = 'assistant: How have you been?'
     await store.send('tutor', '解释当前回复', 'explain')
     expect(mock.invoke).toHaveBeenCalledWith(
-      'codex_send',
+      'backend_send',
       expect.objectContaining({
         request: expect.objectContaining({
           text: '解释当前回复',
@@ -209,7 +255,7 @@ describe('Codex workspace', () => {
     )
     await store.send('main', 'Hello')
     expect(mock.invoke).toHaveBeenCalledWith(
-      'codex_send',
+      'backend_send',
       expect.objectContaining({
         request: expect.objectContaining({ pane: 'main', terminalContext: null }),
       }),
@@ -258,7 +304,7 @@ describe('Codex workspace', () => {
     const store = useCodexStore()
     await store.connect()
     mock.invoke.mockImplementation(async (method: string, args) => {
-      if (method === 'codex_send') throw new Error('quota exceeded')
+      if (method === 'backend_send') throw new Error('quota exceeded')
       return defaultInvoke(method, args)
     })
     await store.send('main', 'My message')
@@ -307,7 +353,7 @@ describe('Codex workspace', () => {
     expect(store.lanes.main.draft).toBe('日本語の下書き')
     expect(store.lanes.main.messages[0]?.text).toBe('途中')
     expect(store.lanes.main.busy).toBe(false)
-    expect(mock.invoke.mock.calls.some((call) => call[0] === 'codex_send')).toBe(false)
+    expect(mock.invoke.mock.calls.some((call) => call[0] === 'backend_send')).toBe(false)
   })
   it('serializes draft writes and flushes the newest text before returning', async () => {
     const store = useCodexStore()
@@ -388,5 +434,502 @@ describe('Codex workspace', () => {
     expect(store.lanes.main.id).toBe('older')
     expect(store.lanes.main.draft).toBe('old draft')
     expect(store.lanes.main.messages[0]?.text).toBe('prior conversation')
+  })
+})
+
+describe('source navigation', () => {
+  it('opens an exact saved message without relying on the history list and restores usage', async () => {
+    const store = useCodexStore()
+    await store.initializeWorkspace()
+    const old = conversation('not-in-history', 'tutor')
+    old.messages = [
+      { id: 'source-message', role: 'assistant', text: 'original', usage: { total_tokens: 12 } },
+    ]
+    mock.invoke.mockImplementation(async (method: string, args) =>
+      method === 'storage_read' ? old : defaultInvoke(method, args),
+    )
+    store.activeView = 'vocabulary'
+    expect(await store.selectConversation(old.id, 'source-message')).toBe(true)
+    expect(store.lanes.tutor.id).toBe(old.id)
+    expect(store.mobilePane).toBe('tutor')
+    expect(store.activeView).toBe('conversation')
+    expect(store.sourceFocus).toMatchObject({
+      conversationId: old.id,
+      messageId: 'source-message',
+      pane: 'tutor',
+    })
+    expect(store.lanes.tutor.messages[0]?.usage).toEqual({ total_tokens: 12 })
+    expect(mock.invoke.mock.calls.some(([method]) => method === 'backend_send')).toBe(false)
+  })
+  it('keeps the word view and draft when the message is gone, without disabling model connections', async () => {
+    const store = useCodexStore()
+    await store.initializeWorkspace()
+    store.activeView = 'vocabulary'
+    store.lanes.main.draft = 'keep typing'
+    expect(await store.selectConversation('older', 'missing')).toBe(false)
+    expect(store.navigationError).toContain('原消息已不存在')
+    expect(store.storageError).toBe('')
+    expect(store.activeView).toBe('vocabulary')
+    expect(store.lanes.main.id).toBe('main')
+    expect(store.lanes.main.draft).toBe('keep typing')
+    expect(store.sourceFocus).toBeNull()
+    expect(store.navigating).toBe(false)
+  })
+  it('saves text entered during a slow read and excludes overlapping navigation and sends', async () => {
+    const store = useCodexStore()
+    await store.connect()
+    const old = conversation('older', 'main')
+    old.messages = [{ id: 'message', role: 'assistant', text: 'original' }]
+    let release!: (value: Conversation) => void
+    const pending = new Promise<Conversation>((resolve) => {
+      release = resolve
+    })
+    const writes: string[] = []
+    mock.invoke.mockImplementation(async (method: string, args) => {
+      if (method === 'storage_read') return pending
+      if (method === 'storage_save')
+        writes.push(args.drafts.find((d: { id: string }) => d.id === 'main')?.text ?? '')
+      return defaultInvoke(method, args)
+    })
+    const navigating = store.selectConversation('older', 'message')
+    await vi.waitFor(() =>
+      expect(mock.invoke.mock.calls.some(([method]) => method === 'storage_read')).toBe(true),
+    )
+    store.lanes.main.draft = 'typed during read'
+    expect(await store.selectConversation('another')).toBe(false)
+    expect(await store.send('main', 'do not send')).toBe(false)
+    release(old)
+    expect(await navigating).toBe(true)
+    expect(writes).toContain('typed during read')
+    expect(store.lanes.main.id).toBe('older')
+    expect(store.navigating).toBe(false)
+  })
+  it('serializes a slow new conversation with source navigation and preserves late drafts', async () => {
+    const store = useCodexStore()
+    await store.initializeWorkspace()
+    let release!: (value: Conversation) => void
+    const pending = new Promise<Conversation>((resolve) => {
+      release = resolve
+    })
+    const writes: string[] = []
+    mock.invoke.mockImplementation(async (method: string, args) => {
+      if (method === 'storage_create') return pending
+      if (method === 'storage_save')
+        writes.push(args.drafts.find((d: { id: string }) => d.id === 'main')?.text ?? '')
+      return defaultInvoke(method, args)
+    })
+    const reset = store.reset('main')
+    await vi.waitFor(() =>
+      expect(mock.invoke.mock.calls.some(([method]) => method === 'storage_create')).toBe(true),
+    )
+    store.lanes.main.draft = 'saved on previous conversation'
+    expect(await store.selectConversation('source', 'message')).toBe(false)
+    release(conversation('new', 'main'))
+    await reset
+    expect(writes).toContain('saved on previous conversation')
+    expect(store.lanes.main.id).toBe('new')
+    expect(store.navigating).toBe(false)
+  })
+  it('does not replace a generating lane and lets the other lane finish untouched', async () => {
+    const store = useCodexStore()
+    await store.initializeWorkspace()
+    store.lanes.tutor.busy = true
+    store.lanes.tutor.messages = [{ id: 'running', role: 'assistant', text: 'partial' }]
+    expect(await store.selectConversation('tutor', 'running')).toBe(false)
+    expect(store.navigationError).toContain('停止')
+    expect(await store.selectConversation('main')).toBe(true)
+    expect(store.lanes.tutor.busy).toBe(true)
+    expect(store.lanes.tutor.messages[0]?.text).toBe('partial')
+  })
+})
+
+describe('API conversation routing', () => {
+  async function setup() {
+    const store = useCodexStore()
+    await store.connect()
+    const backends = useBackendStore()
+    backends.profiles = [
+      {
+        id: 'api',
+        revision: 1,
+        config: {
+          name: 'Fixture API',
+          kind: 'openai_responses',
+          provider: 'openai',
+          endpoint: 'https://api.example.invalid/v1',
+          binaryPath: '',
+          enabled: true,
+        },
+      },
+    ]
+    backends.state('api').credential = { configured: true, persistence: 'session' }
+    store.lanes.main.backend = { profileId: 'api', profileRevision: 1, kind: 'openai_responses' }
+    store.mainModel = 'manual-api-model'
+    return store
+  }
+  it('carries history only by explicit source reference and preserves the unsent draft', async () => {
+    const store = await setup()
+    store.lanes.tutor.draft = 'my unsent question'
+    store.lanes.tutor.messages = [
+      { id: 'old-answer', role: 'assistant', text: 'old visible text', status: 'complete' },
+    ]
+    mock.invoke.mockImplementation(async (method, args) => {
+      if (method === 'storage_create')
+        return {
+          ...conversation(args.id, args.pane),
+          backend: { profileId: args.profileId, profileRevision: 1, kind: 'openai_responses' },
+          context: args.sourceId
+            ? [{ role: 'assistant', text: 'old visible text', status: 'complete' }]
+            : [],
+        }
+      return defaultInvoke(method, args)
+    })
+    await store.selectBackend('tutor', 'api', true)
+    expect(mock.invoke).toHaveBeenCalledWith(
+      'storage_create',
+      expect.objectContaining({ pane: 'tutor', profileId: 'api', sourceId: 'tutor' }),
+    )
+    expect(store.lanes.tutor.context[0]?.text).toBe('old visible text')
+    expect(store.lanes.tutor.messages).toEqual([])
+    expect(store.lanes.tutor.draft).toBe('my unsent question')
+    // The same choice also supports changing model or credentials within this profile.
+    const previous = store.lanes.tutor.id
+    store.tutorModel = 'new-model'
+    mock.invoke.mockClear()
+    await store.selectBackend('tutor', 'api', true)
+    expect(mock.invoke).toHaveBeenCalledWith(
+      'storage_create',
+      expect.objectContaining({ profileId: 'api', sourceId: previous }),
+    )
+    expect(store.tutorModel).toBe('new-model')
+    expect(mock.invoke.mock.calls.some(([method]) => method === 'backend_send')).toBe(false)
+  })
+  it('leaves the old conversation and draft selected if carrying history fails', async () => {
+    const store = await setup()
+    store.lanes.tutor.draft = 'keep this'
+    mock.invoke.mockImplementation(async (method, args) => {
+      if (method === 'storage_create') throw Error('历史超过可带入上限')
+      return defaultInvoke(method, args)
+    })
+    await store.selectBackend('tutor', 'api', true)
+    expect(store.lanes.tutor.id).toBe('tutor')
+    expect(store.lanes.tutor.draft).toBe('keep this')
+    expect(store.lanes.tutor.error).toContain('上限')
+    expect(store.navigating).toBe(false)
+    mock.invoke.mockClear()
+    await store.selectBackend('tutor', 'api')
+    const args = mock.invoke.mock.calls.find(([method]) => method === 'storage_create')![1]
+    expect(args.sourceId).toBeUndefined()
+  })
+  it('isolates concurrent Codex and API replies and ignores stale projections', async () => {
+    const store = await setup()
+    await Promise.all([store.send('main', 'Hello API'), store.send('tutor', 'Explain hello')])
+    const call = mock.invoke.mock.calls.find((c) => c[0] === 'backend_send')![1]
+    const event: TurnEvent = {
+      profileId: 'api',
+      profileRevision: 1,
+      conversationId: 'main',
+      pane: 'main',
+      turnId: 'turn-api',
+      requestId: call.request.messageId,
+      messageId: 'api-answer',
+      sequence: 2,
+      status: 'streaming',
+      text: 'API answer',
+      usage: { input_tokens: 10, output_tokens: 2 },
+      error: null,
+      notice: null,
+    }
+    call.events.onmessage(event)
+    call.events.onmessage({ ...event, sequence: 1, text: 'stale' })
+    call.events.onmessage({ ...event, sequence: 3, conversationId: 'other', text: 'wrong' })
+    emit('item/agentMessage/delta', {
+      pane: 'tutor',
+      conversationId: 'tutor',
+      itemId: 'codex-answer',
+      delta: 'Codex answer',
+    })
+    expect(store.lanes.main.messages.at(-1)?.text).toBe('API answer')
+    expect(store.lanes.tutor.messages.at(-1)?.text).toBe('Codex answer')
+    call.events.onmessage({
+      ...event,
+      sequence: 3,
+      status: 'complete',
+      text: 'API final',
+      usage: null,
+    })
+    call.events.onmessage({ ...event, sequence: 4, text: 'late delta' })
+    expect(store.lanes.main.messages.at(-1)?.text).toBe('API final')
+    expect(store.lanes.main.messages.at(-1)?.usage).toEqual({ input_tokens: 10, output_tokens: 2 })
+    expect(store.lanes.main.busy).toBe(false)
+    expect(store.lanes.tutor.busy).toBe(true)
+  })
+  it('stops the exact API request without stopping the Codex process', async () => {
+    const store = await setup()
+    await store.send('main', 'Hello API')
+    const request = mock.invoke.mock.calls.find((c) => c[0] === 'backend_send')![1].request
+    await store.stop('main')
+    expect(mock.invoke).toHaveBeenCalledWith('backend_stop', {
+      backendKind: store.lanes.main.backend.kind,
+      profileId: store.lanes.main.backend.profileId,
+      pane: 'main',
+      conversationId: 'main',
+      requestId: request.messageId,
+    })
+    expect(mock.invoke.mock.calls.some((c) => c[0] === 'codex_stop')).toBe(false)
+  })
+})
+
+describe('multiple Codex profiles', () => {
+  async function setup() {
+    const store = useCodexStore()
+    await store.initializeWorkspace()
+    const backends = useBackendStore()
+    backends.profiles = ['codex-a', 'codex-b'].map((id) => ({
+      id,
+      revision: 2,
+      config: {
+        name: id,
+        kind: 'codex',
+        provider: 'openai',
+        endpoint: '',
+        binaryPath: `/bin/${id}`,
+        enabled: true,
+      },
+    }))
+    const connections = useCodexConnectionsStore()
+    await store.connectCodexProfile('codex-a')
+    await store.connectCodexProfile('codex-b')
+    store.lanes.main.backend = { profileId: 'codex-a', profileRevision: 2, kind: 'codex' }
+    store.lanes.tutor.backend = { profileId: 'codex-b', profileRevision: 2, kind: 'codex' }
+    store.mainModel = 'main-model'
+    store.tutorModel = 'gpt-5.6-luna'
+    return { store, backends, connections }
+  }
+  it('routes simultaneous sends and overlapping item IDs by profile and disconnects only that profile', async () => {
+    const { store, connections } = await setup()
+    expect(await store.send('main', 'Hello')).toBe(true)
+    expect(await store.send('tutor', 'Explain')).toBe(true)
+    expect(mock.invoke).toHaveBeenCalledWith(
+      'backend_send',
+      expect.objectContaining({
+        request: expect.objectContaining({
+          pane: 'main',
+          profileId: 'codex-a',
+          profileRevision: 2,
+          backendKind: 'codex',
+        }),
+      }),
+    )
+    expect(mock.invoke).toHaveBeenCalledWith(
+      'backend_send',
+      expect.objectContaining({
+        request: expect.objectContaining({
+          pane: 'tutor',
+          profileId: 'codex-b',
+          profileRevision: 2,
+          backendKind: 'codex',
+        }),
+      }),
+    )
+    emit(
+      'item/agentMessage/delta',
+      { pane: 'main', conversationId: 'main', itemId: 'same', delta: 'Main answer' },
+      0,
+    )
+    emit(
+      'item/agentMessage/delta',
+      { pane: 'tutor', conversationId: 'tutor', itemId: 'same', delta: 'Tutor answer' },
+      1,
+    )
+    emit(
+      'item/agentMessage/delta',
+      { pane: 'tutor', conversationId: 'tutor', itemId: 'same', delta: 'Wrong profile' },
+      0,
+    )
+    expect(store.lanes.main.messages.at(-1)?.text).toBe('Main answer')
+    expect(store.lanes.tutor.messages.at(-1)?.text).toBe('Tutor answer')
+    await connections.get('codex-a').disconnect()
+    expect(mock.invoke).toHaveBeenCalledWith('codex_disconnect', { profileId: 'codex-a' })
+    expect(store.lanes.main.busy).toBe(false)
+    expect(store.lanes.main.messages.at(-1)?.status).toBe('interrupted')
+    expect(store.lanes.tutor.busy).toBe(true)
+    emit('item/completed', { pane: 'main', item: { id: 'same', text: 'Late answer' } }, 0)
+    expect(store.lanes.main.messages.at(-1)?.text).toBe('Main answer')
+    emit('item/agentMessage/delta', { pane: 'tutor', itemId: 'same', delta: ' continues' }, 1)
+    expect(store.lanes.tutor.messages.at(-1)?.text).toBe('Tutor answer continues')
+    await store.stop('tutor')
+    expect(mock.invoke).toHaveBeenCalledWith('backend_stop', {
+      backendKind: 'codex',
+      conversationId: 'tutor',
+      pane: 'tutor',
+      requestId: expect.any(String),
+      profileId: 'codex-b',
+    })
+  })
+  it('applies the common durable turn channel to both Codex panes and rejects post-final output', async () => {
+    const { store } = await setup()
+    await store.send('main', 'Hello')
+    await store.send('tutor', 'Explain')
+    const calls = mock.invoke.mock.calls.filter(([method]) => method === 'backend_send')
+    for (const [index, pane] of (['main', 'tutor'] as const).entries()) {
+      const args = calls[index]![1]
+      const event: TurnEvent = {
+        profileId: args.request.profileId,
+        profileRevision: 2,
+        conversationId: pane,
+        pane,
+        turnId: `local-turn-${pane}`,
+        requestId: args.request.messageId,
+        messageId: `local-answer-${pane}`,
+        sequence: 1,
+        status: 'streaming',
+        text: 'partial',
+        usage: null,
+        error: null,
+        notice: null,
+      }
+      args.events.onmessage(event)
+      expect(store.lanes[pane].messages.at(-1)?.text).toBe('partial')
+      store.lanes[pane].error = 'Temporary connection notice'
+      args.events.onmessage({
+        ...event,
+        sequence: 2,
+        status: 'complete',
+        text: 'final',
+        usage: { last: { inputTokens: 20, outputTokens: 3 } },
+      })
+      args.events.onmessage({ ...event, sequence: 3, text: 'late overwrite' })
+      expect(store.lanes[pane].busy).toBe(false)
+      expect(store.lanes[pane].messages.at(-1)?.text).toBe('final')
+      expect(store.lanes[pane].error).toBe('')
+      expect(store.lanes[pane].messages.at(-1)?.usage).toEqual({
+        last: { inputTokens: 20, outputTokens: 3 },
+      })
+    }
+    expect(store.lanes.main.messages.at(-1)?.id).not.toBe(store.lanes.tutor.messages.at(-1)?.id)
+  })
+  it('accepts an already saved final turn after the connection notice arrives first', async () => {
+    const { store, connections } = await setup()
+    await store.send('main', 'Hello')
+    const args = mock.invoke.mock.calls.find(([method]) => method === 'backend_send')![1]
+    const event: TurnEvent = {
+      profileId: 'codex-a',
+      profileRevision: 2,
+      conversationId: 'main',
+      pane: 'main',
+      turnId: 'local-turn',
+      requestId: args.request.messageId,
+      messageId: 'local-answer',
+      sequence: 1,
+      status: 'streaming',
+      text: 'partial',
+      usage: null,
+      error: null,
+      notice: null,
+    }
+    args.events.onmessage(event)
+    await connections.get('codex-a').disconnect()
+    args.events.onmessage({
+      ...event,
+      sequence: 2,
+      status: 'interrupted',
+      text: 'final saved partial',
+    })
+    expect(store.lanes.main.messages.at(-1)?.text).toBe('final saved partial')
+    expect(store.lanes.main.messages.at(-1)?.status).toBe('interrupted')
+    args.events.onmessage({ ...event, sequence: 3, text: 'wrong late write' })
+    expect(store.lanes.main.messages.at(-1)?.text).toBe('final saved partial')
+  })
+  it('ignores the wrong profile or revision and requires reconnect after editing settings', async () => {
+    const { store, backends } = await setup()
+    for (const envelope of [
+      { profileId: 'codex-b', profileRevision: 2 },
+      { profileId: 'codex-a', profileRevision: 1 },
+    ]) {
+      mock.callbacks[0]!.onmessage({
+        ...envelope,
+        method: 'item/agentMessage/delta',
+        params: { pane: 'main', itemId: 'wrong', delta: 'Wrong' },
+      })
+    }
+    expect(store.lanes.main.messages).toEqual([])
+    backends.profiles[0]!.revision = 3
+    expect(store.isReady('main')).toBe(false)
+    expect(store.isReady('tutor')).toBe(true)
+    expect(await store.send('main', 'Do not send')).toBe(false)
+    expect(mock.invoke).not.toHaveBeenCalledWith('backend_send', expect.anything())
+  })
+  it('scopes account, model, limits and login operations to the selected configuration', async () => {
+    const { connections } = await setup()
+    for (const section of ['account', 'models', 'limits']) {
+      expect(mock.invoke).toHaveBeenCalledWith('codex_status', { section, profileId: 'codex-b' })
+    }
+    mock.invoke.mockImplementation(async (method, args) => {
+      if (method === 'codex_status') return { account: null, models: [], limits: null }
+      if (method === 'codex_login')
+        return { loginId: 'login-b', authUrl: 'https://auth.openai.com/authorize' }
+      return defaultInvoke(method, args)
+    })
+    const b = connections.get('codex-b')
+    await b.signIn()
+    expect(mock.invoke).toHaveBeenCalledWith('codex_login', { profileId: 'codex-b' })
+    expect(mock.invoke).toHaveBeenCalledWith('codex_open_login', {
+      profileId: 'codex-b',
+      url: 'https://auth.openai.com/authorize',
+    })
+    await b.cancelLogin()
+    expect(mock.invoke).toHaveBeenCalledWith('codex_cancel_login', {
+      profileId: 'codex-b',
+      loginId: 'login-b',
+    })
+    expect(connections.get('codex-a').ready).toBe(true)
+  })
+  it('an old login cancellation cannot clear a newer login after reconnect', async () => {
+    const { connections } = await setup()
+    const connection = connections.get('codex-b')
+    connection.login = { loginId: 'old-login', authUrl: 'https://auth.openai.com/authorize' }
+    connection.loggingIn = true
+    let finish!: () => void
+    mock.invoke.mockImplementation((method, args) =>
+      method === 'codex_cancel_login'
+        ? new Promise<void>((resolve) => {
+            finish = resolve
+          })
+        : Promise.resolve(defaultInvoke(method, args)),
+    )
+    const cancelled = connection.cancelLogin()
+    await connection.disconnect()
+    await connection.connect('/bin/codex-b', 2)
+    connection.login = { loginId: 'new-login', authUrl: 'https://auth.openai.com/authorize' }
+    connection.loggingIn = true
+    finish()
+    await cancelled
+    expect(connection.login?.loginId).toBe('new-login')
+    expect(connection.loggingIn).toBe(true)
+  })
+  it('cancel during initialization invalidates both its result and old channel before reconnecting', async () => {
+    let finish!: (value: unknown) => void
+    mock.invoke.mockImplementation((method, args) =>
+      method === 'codex_connect'
+        ? new Promise((resolve) => {
+            finish = resolve
+          })
+        : Promise.resolve(defaultInvoke(method, args)),
+    )
+    const connection = useCodexConnectionsStore().get('codex-a')
+    const pending = connection.connect('/bin/codex-a', 2)
+    expect(connection.connecting).toBe(true)
+    await connection.disconnect()
+    finish({ profileRevision: 2 })
+    await pending
+    expect(connection.connected).toBe(false)
+    expect(connection.connecting).toBe(false)
+    expect(mock.invoke).not.toHaveBeenCalledWith('codex_status', expect.anything())
+    mock.invoke.mockImplementation(async (method, args) => defaultInvoke(method, args))
+    await connection.connect('/bin/codex-a', 2)
+    emit('connection/closed', { message: 'Old connection exited' }, 0)
+    expect(connection.ready).toBe(true)
+    expect(connection.error).toBe('')
   })
 })

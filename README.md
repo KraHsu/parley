@@ -6,9 +6,13 @@ Parley 是一个开源、以本地数据为主的语言学习桌面客户端，�
 
 通过官方 **Codex App Server** 接入：每位用户登录自己的 ChatGPT 账号，并使用自己的 Codex 额度。项目不提供共享账号或集中转发服务。Parley 是独立项目。
 
+## Web 端
+
+[打开 Parley Web](https://krahsu.github.io/parley/) · Web 版本只使用用户自己的 API，支持双面板对话、语言助手、词句收藏与浏览器本地学习数据。开发运行 `npm run web:dev`，构建运行 `npm run web:build`，静态文件输出到 `dist-web/`，可部署到 GitHub Pages。密钥只保留在当前标签页内存；浏览器直连需要服务允许 CORS。详见 [Web 使用与部署说明](docs/WEB.md)。
+
 ## 下载安装
 
-从 [GitHub Releases](https://github.com/KraHsu/parley/releases) 下载 Linux 安装包。当前提供 Ubuntu 24.04 x86_64 预览版，包含桌面程序和 `parley-cli`；安装后无需编译源码。步骤见 [安装说明](docs/INSTALL.md)。
+Linux 安装包面向 Ubuntu 24.04 x86_64，包含桌面程序和 `parley-cli`。旧版 `Parley_0.3.0_amd64.deb` 与 KDE Parley 包名冲突，请勿继续安装；当前修复包改用 `parley-desktop` 包名和 `ParleyDesktop_…` 文件名。下载、构建及已有系统的修复步骤见 [安装说明](docs/INSTALL.md)。
 
 ## 终端 Codex + 语法助手
 
@@ -30,6 +34,8 @@ parley-cli -- resume --last
 终端保持 Codex 原有登录、快捷键、工具和历史；GUI 保存辅导记录。操作和边界见 [终端伴随模式](docs/TERMINAL_COMPANION.md)。
 
 ## 当前状态
+
+已发布的 v0.3.0 以 Codex 和词句学习为主。当前主分支为 `0.4.0-alpha.1` 多模型开发版：已迁移至 Diesel，并接入 API、Codex 和 Claude Code GUI 的独立主辅面板。开发版的设置步骤见[模型服务指南](docs/BACKENDS.md)，已验证与待验证项目见[兼容记录](docs/BACKEND_COMPATIBILITY.md)。完整厂商实测及发布验收尚未完成。
 
 当前支持 **官方 Codex TUI + 独立语法助手 GUI**，也保留双面板桌面工作台；词句收藏、注释、备份和离线复习已实现。操作见[词句学习指南](docs/VOCABULARY.md)。
 
@@ -72,7 +78,7 @@ npm run dev
 
 | 命令                                   | 用途                                          |
 | -------------------------------------- | --------------------------------------------- |
-| `npm run doctor`                       | 检查开发环境；聊天接入需要 Codex CLI          |
+| `npm run doctor`                       | 检查开发环境；CLI 接入依用户选择              |
 | `npm run dev`                          | Vite 浏览器界面预览                           |
 | `npm run desktop:dev`                  | 启动 Tauri 开发窗口                           |
 | `npm run build`                        | TypeScript 检查与前端生产构建                 |
@@ -106,6 +112,8 @@ npm run dev
 ```
 
 详细安排见 [开发计划](docs/DEVELOPMENT_PLAN.md)，实现边界见 [架构设计](docs/ARCHITECTURE.md)，开发操作见 [开发指南](docs/DEVELOPMENT.md)。
+
+正在按 [多模型后端开发计划](docs/MULTI_BACKEND_PLAN.md) 扩展主流模型 API、Codex 与 Claude Code，以及主聊和语言助手独立选择后端。该功能尚未发布，进度见 [实现记录](docs/MULTI_BACKEND_IMPLEMENTATION.md)。
 
 ## 开源许可
 

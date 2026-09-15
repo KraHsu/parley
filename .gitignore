@@ -21,3 +21,5 @@ Thumbs.db
 *.sqlite-wal
 *.sqlite-shm
 auth.json
+
+dist-web/

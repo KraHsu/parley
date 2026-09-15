@@ -96,35 +96,49 @@ pub fn schedule(card: &Card, rating: &str, now: i64) -> Result<Card> {
 use crate::storage::StorageState;
 use tauri::State;
 #[tauri::command]
-pub fn vocabulary_card_save(state: State<'_, StorageState>, request: CardRequest) -> Result<Card> {
-    state.get()?.vocabulary_card_save(&request)
+pub async fn vocabulary_card_save(
+    state: State<'_, StorageState>,
+    request: CardRequest,
+) -> Result<Card> {
+    state
+        .run(move |storage| storage.vocabulary_card_save(&request))
+        .await
 }
 #[tauri::command]
-pub fn vocabulary_review_queue(
+pub async fn vocabulary_review_queue(
     state: State<'_, StorageState>,
     limit: u32,
     new_limit: u32,
     day_start: i64,
 ) -> Result<ReviewQueue> {
     state
-        .get()?
-        .vocabulary_review_queue(limit, new_limit, day_start)
+        .run(move |storage| storage.vocabulary_review_queue(limit, new_limit, day_start))
+        .await
 }
 #[tauri::command]
-pub fn vocabulary_review_grade(
+pub async fn vocabulary_review_grade(
     state: State<'_, StorageState>,
     request: GradeRequest,
 ) -> Result<GradeResult> {
-    state.get()?.vocabulary_review_grade(&request)
+    state
+        .run(move |storage| storage.vocabulary_review_grade(&request))
+        .await
 }
 #[tauri::command]
-pub fn vocabulary_review_undo(
+pub async fn vocabulary_review_undo(
     state: State<'_, StorageState>,
     request: UndoRequest,
 ) -> Result<Card> {
-    state.get()?.vocabulary_review_undo(&request)
+    state
+        .run(move |storage| storage.vocabulary_review_undo(&request))
+        .await
 }
 #[tauri::command]
-pub fn vocabulary_tags_save(state: State<'_, StorageState>, request: TagsRequest) -> Result<Entry> {
-    state.get()?.vocabulary_tags_save(&request)
+pub async fn vocabulary_tags_save(
+    state: State<'_, StorageState>,
+    request: TagsRequest,
+) -> Result<Entry> {
+    state
+        .run(move |storage| storage.vocabulary_tags_save(&request))
+        .await
 }

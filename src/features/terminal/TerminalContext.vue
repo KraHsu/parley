@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { useCodexStore } from '../codex/store'
+import { useChatStore } from '../chat/store'
+import { useBackendStore } from '../backends/store'
 import { useSettingsStore } from '../settings/store'
 import StudyText from '../vocabulary/StudyText.vue'
 import type { VocabularySource } from '../vocabulary/types'
@@ -12,9 +13,18 @@ import {
   type TerminalThread,
   type TerminalMessage,
 } from './context'
-const props = defineProps<{ startedAt: number }>()
-const codex = useCodexStore()
+const props = defineProps<{ startedAt: number; backend?: 'codex' | 'claude-code' }>()
+const codex = useChatStore()
 const settings = useSettingsStore()
+const backends = useBackendStore()
+const sourceReady = computed(() => props.backend === 'claude-code' || codex.connected)
+const sourceName = computed(() => (props.backend === 'claude-code' ? 'Claude Code' : 'Codex'))
+const assistantName = computed(
+  () =>
+    backends.profiles.find((p) => p.id === codex.lanes.tutor.backend.profileId)?.config.name ??
+    '所选助手服务',
+)
+const notice = ref('')
 const threads = ref<TerminalThread[]>([])
 const messages = ref<TerminalMessage[]>([])
 const threadId = ref('')
@@ -34,19 +44,23 @@ let timer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
 function schedule() {
   clearTimeout(timer)
-  if (!disposed && codex.connected) timer = setTimeout(() => void refresh(), 2000)
+  if (!disposed && sourceReady.value) timer = setTimeout(() => void refresh(), 2000)
 }
 async function refresh() {
   clearTimeout(timer)
-  if (!codex.connected || disposed) return
+  if (!sourceReady.value || disposed) return
   const current = ++generation,
     requested = threadId.value
   reading.value = true
   try {
-    const result = await invoke<TerminalSnapshot>('codex_terminal_context', {
-      threadId: requested || null,
-    })
-    if (disposed || current !== generation || !codex.connected) return
+    const result = await invoke<TerminalSnapshot>(
+      props.backend === 'claude-code' ? 'claude_terminal_context' : 'codex_terminal_context',
+      {
+        threadId: requested || null,
+      },
+    )
+    if (disposed || current !== generation || !sourceReady.value) return
+    notice.value = result.notice ?? ''
     threads.value = result.threads
     error.value = ''
     if (!requested) {
@@ -92,7 +106,7 @@ watch(messageId, () => {
   codex.terminalContext = studyContext(latest.value ? [latest.value] : messages.value)
 })
 watch(
-  () => codex.connected,
+  () => sourceReady.value,
   (connected) => {
     generation++
     clearTimeout(timer)
@@ -132,17 +146,21 @@ onUnmounted(() => {
 <template>
   <section class="terminal-context" aria-label="自动同步的终端上下文">
     <label
-      >终端对话<select v-model="threadId" :disabled="!codex.connected">
+      >终端对话<select v-model="threadId" :disabled="!sourceReady">
         <option value="">
-          {{ threads.length ? '选择会话，或等待新对话自动关联' : '等待 Codex 会话…' }}
+          {{ threads.length ? '选择会话，或等待新对话自动关联' : `等待 ${sourceName} 会话…` }}
         </option>
         <option v-for="thread in threads" :key="thread.id" :value="thread.id">
-          {{ thread.title || 'Codex 对话' }}
+          {{ thread.title || `${sourceName} 对话` }}
         </option>
       </select></label
     >
     <p v-if="!threadId" class="settings-help">
       新对话会自动关联；恢复历史对话时，从上方选择，无需复制。
+    </p>
+    <p v-if="notice" class="settings-help" role="status">{{ notice }}</p>
+    <p class="settings-help">
+      解释或翻译将发送到 {{ assistantName }}（{{ codex.tutorModel || '待选择模型' }}）。
     </p>
     <details v-if="latest">
       <summary>{{ selection ? '已选中片段 · 查看终端内容' : '查看终端最近消息' }}</summary>
@@ -150,7 +168,7 @@ onUnmounted(() => {
         >查看消息<select v-model="messageId">
           <option value="">跟随最近回复</option>
           <option v-for="message in messages" :key="message.id" :value="message.id">
-            {{ message.role === 'assistant' ? 'GPT' : '你' }} · {{ message.text.slice(0, 45) }}
+            {{ message.role === 'assistant' ? sourceName : '你' }} · {{ message.text.slice(0, 45) }}
           </option>
         </select></label
       >
@@ -175,17 +193,17 @@ onUnmounted(() => {
     <div class="terminal-context-actions">
       <button
         class="secondary-button"
-        :disabled="!codex.ready || !codex.terminalContext || codex.lanes.tutor.busy"
+        :disabled="!codex.isReady('tutor') || !codex.terminalContext || codex.lanes.tutor.busy"
         @click="ask('explain')"
       >
         解释{{ selection ? '选中片段' : '当前回复' }}</button
       ><button
         class="secondary-button"
-        :disabled="!codex.ready || !codex.terminalContext || codex.lanes.tutor.busy"
+        :disabled="!codex.isReady('tutor') || !codex.terminalContext || codex.lanes.tutor.busy"
         @click="ask('translate')"
       >
         翻译</button
-      ><span>{{ threadId ? '自动同步已保存的对话' : reading ? '正在关联…' : '等待关联' }}</span>
+      ><span>{{ threadId ? '自动同步终端对话' : reading ? '正在关联…' : '等待关联' }}</span>
     </div>
     <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
   </section>

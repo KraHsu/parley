@@ -2,7 +2,17 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "get_runtime_info",
+            "backend_profiles",
+            "backend_save_profile",
+            "backend_credential_status",
+            "backend_set_credential",
+            "backend_remove_credential",
+            "backend_models",
+            "backend_send",
+            "backend_stop",
+            "backend_disconnect",
             "get_launch_options",
+            "claude_terminal_context",
             "codex_connect",
             "codex_disconnect",
             "codex_status",

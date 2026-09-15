@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import MessageList from './features/codex/MessageList.vue'
 import TutorPanel from './features/tutor/TutorPanel.vue'
 import TerminalContext from './features/terminal/TerminalContext.vue'
 import VocabularyPanel from './features/vocabulary/VocabularyPanel.vue'
 import VocabularyEditor from './features/vocabulary/VocabularyEditor.vue'
 import { useVocabularyStore } from './features/vocabulary/store'
 import LanguagePicker from './features/settings/LanguagePicker.vue'
-import ConnectionSettings from './features/codex/ConnectionSettings.vue'
+import ConnectionSettings from './features/backends/BackendSettings.vue'
 import { useSettingsStore } from './features/settings/store'
 import { useWorkspaceWindow } from './shared/use-workspace-window'
 import { isDesktop } from './shared/desktop'
@@ -15,6 +16,7 @@ const props = defineProps<{
   initialCodexPath?: string | null
   terminalCwd?: string | null
   terminalStartedAt?: number
+  terminalBackend?: 'codex' | 'claude-code'
 }>()
 const settings = useSettingsStore()
 const view = ref('tutor')
@@ -32,29 +34,44 @@ function showWords(tab: string) {
   view.value = 'vocabulary'
 }
 const dialog = ref<HTMLDialogElement>()
-const { codex, closeError, attemptClose } = useWorkspaceWindow(
+const { codex, workspace, closeError, attemptClose } = useWorkspaceWindow(
   () => dialog.value?.close(),
   async () => {
-    if (props.initialCodexPath) codex.codexPath = props.initialCodexPath
-    if (isDesktop() && codex.codexPath) await codex.connect()
-    else dialog.value?.showModal()
+    if (props.initialCodexPath) workspace.codexPath = props.initialCodexPath
+    const needsSource = !!props.terminalCwd && props.terminalBackend !== 'claude-code'
+    if (isDesktop()) {
+      if (needsSource && workspace.codexPath) await codex.connect()
+      const tutor = codex.lanes.tutor.backend
+      if (tutor.kind === 'codex' && !(needsSource && tutor.profileId === 'codex-default'))
+        await codex.connectCodexProfile(tutor.profileId)
+    }
+    if (!codex.isReady('tutor')) dialog.value?.showModal()
   },
 )
+watch(
+  () => codex.sourceFocus,
+  (focus) => {
+    if (focus) view.value = focus.pane === 'tutor' ? 'tutor' : 'source-main'
+  },
+)
+const assistantLabel = computed(() => codex.paneLabel('tutor'))
 </script>
 <template>
   <div class="tutor-app">
     <header class="tutor-app-header">
       <div>
         <strong>parley<span>.</span></strong>
-        <p>Codex 在终端，语言答疑在这里。</p>
+        <p>
+          {{ terminalBackend === 'claude-code' ? 'Claude Code' : 'Codex' }} 在终端，语言答疑在这里。
+        </p>
       </div>
       <button class="secondary-button" @click="dialog?.showModal()">
-        设置 · {{ codex.label }}
+        设置 · {{ assistantLabel }}
       </button>
     </header>
-    <div v-if="codex.loading || codex.storageError" class="storage-banner" role="status">
-      {{ codex.loading ? '正在恢复学习记录…' : codex.storageError }}
-      <button v-if="codex.storageError" class="text-button" @click="codex.retryStorage">
+    <div v-if="workspace.loading || workspace.storageError" class="storage-banner" role="status">
+      {{ workspace.loading ? '正在恢复学习记录…' : workspace.storageError }}
+      <button v-if="workspace.storageError" class="text-button" @click="codex.retryStorage">
         重试
       </button>
     </div>
@@ -62,13 +79,17 @@ const { codex, closeError, attemptClose } = useWorkspaceWindow(
       {{ codex.error }}
       <button class="text-button" @click="dialog?.showModal()">打开连接设置</button>
     </div>
-    <div v-if="codex.closing" class="storage-banner" role="status">正在保存并关闭…</div>
+    <div v-if="workspace.closing" class="storage-banner" role="status">正在保存并关闭…</div>
+    <div v-if="codex.navigationError" class="storage-banner" role="alert">
+      {{ codex.navigationError }}
+      <button class="text-button" @click="codex.navigationError = ''">关闭提示</button>
+    </div>
     <div v-if="closeError" class="storage-banner" role="alert">
       {{ closeError }}
-      <button class="text-button" :disabled="codex.closing" @click="attemptClose()">
+      <button class="text-button" :disabled="workspace.closing" @click="attemptClose()">
         重试关闭
       </button>
-      <button class="text-button" :disabled="codex.closing" @click="attemptClose(true)">
+      <button class="text-button" :disabled="workspace.closing" @click="attemptClose(true)">
         强制关闭并放弃未保存修改
       </button>
     </div>
@@ -94,8 +115,26 @@ const { codex, closeError, attemptClose } = useWorkspaceWindow(
       v-if="terminalCwd"
       v-show="view === 'tutor'"
       :started-at="terminalStartedAt ?? 0"
+      :backend="terminalBackend"
     />
     <main class="tutor-app-body">
+      <section
+        v-if="view === 'source-main'"
+        class="content-panel source-conversation"
+        aria-label="原对话"
+      >
+        <header class="panel-toolbar">
+          <h2>原对话</h2>
+          <button class="text-button" @click="showWords('words')">返回词句</button>
+        </header>
+        <div class="scroll-region" tabindex="0" aria-label="原对话消息">
+          <MessageList
+            pane="main"
+            :messages="codex.lanes.main.messages"
+            :busy="codex.lanes.main.busy"
+          />
+        </div>
+      </section>
       <TutorPanel v-show="view === 'tutor'" /><VocabularyPanel
         companion
         v-show="view === 'vocabulary'"
@@ -120,15 +159,16 @@ const { codex, closeError, attemptClose } = useWorkspaceWindow(
           <LanguagePicker
             v-model="settings.nativeLanguage"
             label="母语"
-            :disabled="!codex.initialized || codex.closing"
+            :disabled="!workspace.initialized || workspace.closing"
           />
           <LanguagePicker
             v-model="settings.targetLanguage"
             label="目标语言"
-            :disabled="!codex.initialized || codex.closing"
+            :disabled="!workspace.initialized || workspace.closing"
           />
           <p class="settings-help">
-            这些设置用于语法助手。终端对话由 Codex 管理；关联后，提问会自动附带最近对话和选中片段。
+            这些设置用于语法助手。终端对话由官方 CLI
+            管理；关联后，提问会自动附带最近对话和选中片段。
           </p>
         </section>
         <ConnectionSettings tutor-only />
