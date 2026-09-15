@@ -9,3 +9,5 @@ Cargo.lock
 .codex
 
 dist-web
+
+artifacts/

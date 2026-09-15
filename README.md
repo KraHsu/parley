@@ -1,120 +1,98 @@
-# Parley
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/readme-hero-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="docs/media/readme-hero-light.svg" />
+  <img src="docs/media/readme-hero-light.svg" alt="Parley：从一段对话，到一个值得留下的表达。" width="100%" />
+</picture>
 
-**在真实对话中学习任何语言。**
+<div align="center">
 
-Parley 是一个开源、以本地数据为主的语言学习桌面客户端，使用 **Vue 3 + TypeScript + Rust + Tauri 2**。主对话用于目标语言交流，旁边的语言助手负责母语答疑、表达提示、翻译和语法解释，生词本保存从对话中积累的词句。
+# 边聊，边懂，边记住。
 
-通过官方 **Codex App Server** 接入：每位用户登录自己的 ChatGPT 账号，并使用自己的 Codex 额度。项目不提供共享账号或集中转发服务。Parley 是独立项目。
+用目标语言对话，随时理解词句，把想学的表达留给下一次复习。
 
-## Web 端
+**[打开 Web ↗](https://krahsu.github.io/parley/)** · [桌面安装](docs/INSTALL.md)
 
-[打开 Parley Web](https://krahsu.github.io/parley/) · Web 版本只使用用户自己的 API，支持双面板对话、语言助手、词句收藏与浏览器本地学习数据。开发运行 `npm run web:dev`，构建运行 `npm run web:build`，静态文件输出到 `dist-web/`，可部署到 GitHub Pages。密钥只保留在当前标签页内存；浏览器直连需要服务允许 CORS。详见 [Web 使用与部署说明](docs/WEB.md)。
+[![MIT License](https://img.shields.io/badge/license-MIT-7664b2?style=flat-square)](LICENSE) [![Build checks](https://github.com/KraHsu/parley/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/KraHsu/parley/actions/workflows/ci.yml) [![Web](https://img.shields.io/badge/try-Parley_Web-7664b2?style=flat-square)](https://krahsu.github.io/parley/)
 
-## 下载安装
+软件免费开源。Web 使用你自己的 API，模型请求使用所选服务的凭据和额度。
 
-Linux 安装包面向 Ubuntu 24.04 x86_64，包含桌面程序和 `parley-cli`。旧版 `Parley_0.3.0_amd64.deb` 与 KDE Parley 包名冲突，请勿继续安装；当前修复包改用 `parley-desktop` 包名和 `ParleyDesktop_…` 文件名。下载、构建及已有系统的修复步骤见 [安装说明](docs/INSTALL.md)。
+</div>
 
-## 终端 Codex + 语法助手
+## 从“这是什么意思”，到“下次我也想用”
+
+主聊负责交流，语言助手负责理解与表达，词句本把今天遇到的内容留给下一次练习。
+
+| 交流时                                           | 遇到不懂的地方                                         | 想留下一个表达                           | 下一次练习                                 |
+| ------------------------------------------------ | ------------------------------------------------------ | ---------------------------------------- | ------------------------------------------ |
+| 用目标语言聊自己的生活，主聊与答疑各有一个面板。 | 在“怎么说 / 解释 / 翻译”之间切换，带着选中的内容提问。 | 保存词句、原句、自己的释义、注释和标签。 | 从词句本进入复习，先回忆，再看答案和自评。 |
+
+## 选择你习惯的方式
+
+|              | Web                                            | 桌面工作台                        | 终端伴随                                     |
+| ------------ | ---------------------------------------------- | --------------------------------- | -------------------------------------------- |
+| **怎么开始** | [打开浏览器](https://krahsu.github.io/parley/) | [安装说明](docs/INSTALL.md)       | `parley-cli`                                 |
+| **模型连接** | 仅 API                                         | API、本机 Codex、Claude Code GUI¹ | 用户自己的 Codex / Claude Code，助手独立配置 |
+| **学习数据** | 当前浏览器 IndexedDB                           | 本机 SQLite                       | 本机学习记录；原生历史由 CLI 管理            |
+| **适合**     | 在浏览器里试着练几句                           | 长期积累对话与词句                | 使用原生终端时随手理解语言                   |
+
+¹ Claude Code GUI 后端需要独立 API Key。原生 CLI 的登录与 GUI 助手连接是不同入口。Web 和桌面的备份格式目前不直接互通。
+
+### 先从 Web 开始
+
+1. 打开 [Parley Web](https://krahsu.github.io/parley/)，在设置中添加自己的 API 服务。
+2. 为主聊和语言助手分别选择服务与模型，填写目标语言和母语。
+3. 聊一句，选中想理解的词句，试着解释并收藏。
+
+Web 密钥仅保留在当前标签页内存，刷新后需重新填写。浏览器直连需要服务允许 CORS。没有密钥也可以手动添加词句、查看本地资料和复习。[查看 Web 使用说明 →](docs/WEB.md)
+
+### 原生终端，旁边多一个语言助手
 
 ```bash
 parley-cli
 ```
 
-源码开发可先运行 `npm run cli:build`，再运行 `npm run cli`。
+保留官方 CLI 的登录、快捷键和历史。GUI 同步已保存的回复，你可以在同步正文中选词、解释、翻译和收藏；有多个会话候选时自行选择。
 
-启动器读取设置中保存的 Codex 路径，在当前终端直接运行官方 TUI，同时打开语法助手窗口。首次使用也可以指定路径：
+[Codex / Claude Code 终端伴随指南 →](docs/TERMINAL_COMPANION.md)
 
-```bash
-parley-cli --codex "$(command -v codex)"
-parley-cli -- resume --last
-```
+## 现在能用到什么
 
-新对话自动关联到 GUI，无需复制文本。点击“解释当前回复”或“翻译”，或在 GUI 中选中同步的片段提问。恢复历史会话或候选不唯一时，从下拉框选择会话。同步读取 Codex 已保存的对话，通常在回复完成后更新。
+Web 已上线；桌面主分支是 **0.4.0-alpha.1** 预览版。Ubuntu 24.04 amd64 安装与学习流程已验证；macOS / Windows 通过构建检查，原生运行与安装包仍待验收。
 
-终端保持 Codex 原有登录、快捷键、工具和历史；GUI 保存辅导记录。操作和边界见 [终端伴随模式](docs/TERMINAL_COMPANION.md)。
+提供 OpenAI、Claude、Gemini 原生 API，以及 DeepSeek、千问、Kimi、Z.AI 与自定义兼容服务预设。**提供协议适配不等于所有厂商已实测通过**，当前真实 API 厂商验收暂缓。[查看兼容记录 →](docs/BACKEND_COMPATIBILITY.md)
 
-## 当前状态
+> **旧版 Linux 用户：**旧的 `Parley_0.3.0_amd64.deb` 与 KDE Parley 包名冲突。修复包使用 `parley-desktop` 包名及 `ParleyDesktop_…` 文件名；安装或升级前请按[安装说明](docs/INSTALL.md)操作。
 
-已发布的 v0.3.0 以 Codex 和词句学习为主。当前主分支为 `0.4.0-alpha.1` 多模型开发版：已迁移至 Diesel，并接入 API、Codex 和 Claude Code GUI 的独立主辅面板。开发版的设置步骤见[模型服务指南](docs/BACKENDS.md)，已验证与待验证项目见[兼容记录](docs/BACKEND_COMPATIBILITY.md)。完整厂商实测及发布验收尚未完成。
+<details>
+<summary><strong>关于模型、数据与学习方式</strong></summary>
 
-当前支持 **官方 Codex TUI + 独立语法助手 GUI**，也保留双面板桌面工作台；词句收藏、注释、备份和离线复习已实现。操作见[词句学习指南](docs/VOCABULARY.md)。
+- **软件开源，模型服务独立。** Parley 不提供共享账号、统一余额或免费无限请求。API 使用服务商凭据；本机 CLI 按其自身登录与使用方式运行。
+- **学习记录保存在本地。** Web 使用当前浏览器，桌面使用本机数据库；模型请求会发送到你选择的服务。备份方式见 [Web 指南](docs/WEB.md)和[桌面持久化说明](docs/PERSISTENCE.md)。
+- **先做好文字练习。** 当前提供文字交流、表达提示、解释、翻译与词句复习；尚未实现语音对练、发音评分或跨设备同步。
+- **语言可以自己选。** 目标语言与母语可配置；不同语言和模型的回答质量取决于所选服务，Parley 不承诺学习效果。
+- **收藏与复习有清楚的边界。** 词句保留原句快照；Web 与桌面功能细节和备份格式有所不同。[词句学习指南 →](docs/VOCABULARY.md)
 
-- 固定视口的桌面工作台：左侧导航、中间对话/词句视图、右侧语言助手。页面本身不滚动，内容区域各自滚动。
-- 可编辑的双区草稿、目标语言话题提示、三种辅导模式及多语言词句检索。
-- 语言、模型、草稿和历史消息自动保存到本地 SQLite；重启后可离线查看、继续对话。
-- 本机 Codex 连接、官方 ChatGPT 登录、真实模型列表与额度状态。
-- 主聊和语言助手独立流式回复、停止生成、重置会话与连接错误提示。
-- Tauri 桌面壳及 Vue → Rust 的运行环境查询。
-- 开发、构建、格式检查、环境诊断和 CI 配置。
-- 历史会话切换与删除、中断回复恢复、写入失败提示。
-- 消息及终端同步正文选词收藏、原句快照、释义与注释、标签、草稿恢复、回收站。
-- JSON 备份与预览导入、CSV 导出；离线双方向复习、暂停、重置和撤销评分。
-- 详细范围见[词句学习开发计划](docs/VOCABULARY_PLAN.md)，验收证据见[实现记录](docs/VOCABULARY_IMPLEMENTATION.md)。
+</details>
 
-普通桌面工作台启动时不自动连接；终端伴随窗口会连接所选的本机 Codex。连接本身不发送模型请求。点击设置中的“连接本机 Codex”开始使用；完整操作、版本要求与限制见 [Codex 接入说明](docs/CODEX_INTEGRATION.md)，数据位置与恢复行为见 [持久化说明](docs/PERSISTENCE.md)。浏览器预览只提供界面，真实接入需要桌面端。
+## 为自己的学习方式动手
 
-![Parley 桌面工作台](docs/screenshots/workspace.png)
+**Vue 3 · TypeScript · Tauri 2 · Rust · Diesel / SQLite**
 
-## 本地开发
-
-需要 Node.js **24.12+（24.x）**、npm、Rust stable，以及操作系统对应的 [Tauri 系统依赖](https://v2.tauri.app/start/prerequisites/)。仓库以 `package-lock.json` 和 `Cargo.lock` 锁定依赖。
+Node.js 24.12+（24.x）。桌面开发还需要 Rust 和 [Tauri 系统依赖](https://v2.tauri.app/start/prerequisites/)。
 
 ```bash
 nvm use
 npm ci
-npm run doctor
-npm run desktop:dev
+npm run web:dev       # 可连接 API 的 Web 开发环境
+# npm run desktop:dev  # Tauri 桌面开发环境
 ```
 
-首次 Rust 构建会下载和编译桌面依赖，耗时通常明显长于前端构建。Linux 需要 GTK 3 和 WebKitGTK 4.1 开发包；Windows 需要 C++ Build Tools 和 WebView2；macOS 需要 Xcode Command Line Tools。
+`npm run dev` 是桌面界面的浏览器预览；Web 产品入口使用 `npm run web:dev`。全部命令、目录结构和构建步骤见[开发指南](docs/DEVELOPMENT.md)。
 
-只查看界面：
+[模型服务](docs/BACKENDS.md) · [词句与复习](docs/VOCABULARY.md) · [架构](docs/ARCHITECTURE.md) · [开发计划](docs/MULTI_BACKEND_PLAN.md) · [宣传计划与视频脚本](docs/marketing/README.md)
 
-```bash
-npm run dev
-```
+欢迎用 [Issues](https://github.com/KraHsu/parley/issues) 分享一个具体的学习场景或可复现的问题，也欢迎提交改进。反馈连接问题时请说明系统、使用入口和错误现象，不要附上 API Key。
 
-打开 `http://127.0.0.1:1420`。点击左下角工作空间或右上角“未连接”进入学习设置。“检查桌面连接”在浏览器中会提示使用桌面启动命令，不会伪造 Rust 连接结果。
+---
 
-| 命令                                   | 用途                                          |
-| -------------------------------------- | --------------------------------------------- |
-| `npm run doctor`                       | 检查开发环境；CLI 接入依用户选择              |
-| `npm run dev`                          | Vite 浏览器界面预览                           |
-| `npm run desktop:dev`                  | 启动 Tauri 开发窗口                           |
-| `npm run build`                        | TypeScript 检查与前端生产构建                 |
-| `npm run check`                        | Prettier、TypeScript、Rust 格式与 Clippy 检查 |
-| `npm run desktop:check -- -- --locked` | 构建桌面调试程序，不制作安装包                |
-| `npm run desktop:build -- -- --locked` | 构建当前平台的发行程序和安装包                |
-| `npm run format`                       | 格式化前端、配置和文档                        |
-| `cargo fmt --all`                      | 格式化 Rust                                   |
-
-单独在干净检出上运行 `npm run check` 前，先运行 `npm run build`，为 Tauri 提供前端产物。
-
-## 工作区
-
-```text
-.
-├── src/
-│   ├── features/
-│   │   ├── codex/            # 连接状态、模型与流式消息
-│   │   ├── conversation/     # 目标语言主对话
-│   │   ├── tutor/            # 母语辅导区
-│   │   ├── vocabulary/       # 词句收藏区
-│   │   └── settings/         # Pinia 语言设置
-│   ├── shared/              # 类型与 Tauri 调用边界
-│   └── styles/              # 全局样式
-├── src-tauri/               # Rust 桌面程序、命令及能力权限
-├── public/                  # 自有 SVG 图标
-├── scripts/                 # 环境诊断
-├── docs/                    # 产品计划、架构和开发说明
-├── Cargo.toml               # Rust workspace
-└── .github/workflows/       # 三平台构建、检查及测试
-```
-
-详细安排见 [开发计划](docs/DEVELOPMENT_PLAN.md)，实现边界见 [架构设计](docs/ARCHITECTURE.md)，开发操作见 [开发指南](docs/DEVELOPMENT.md)。
-
-正在按 [多模型后端开发计划](docs/MULTI_BACKEND_PLAN.md) 扩展主流模型 API、Codex 与 Claude Code，以及主聊和语言助手独立选择后端。该功能尚未发布，进度见 [实现记录](docs/MULTI_BACKEND_IMPLEMENTATION.md)。
-
-## 开源许可
-
-采用 [MIT License](LICENSE)。项目当前以免费开源方式开发；MIT 同时允许他人按许可条款使用和修改代码，包括商业使用。代码许可不代替 OpenAI 服务条款，用户仍需拥有适用的服务访问资格。
+[MIT License](LICENSE) · Parley 是独立开源项目，与同名 KDE Parley 无关，也不是任何模型服务商的官方客户端。
