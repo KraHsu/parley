@@ -1,5 +1,15 @@
-import { syncLearningFields } from './learning-exchange'
-import { scheduleCard } from '../shared/learning-exchange'
+import { ref } from 'vue'
+import { emptyChanges, saveState } from './storage'
+import { latestReview, type Direction } from './review'
+import { syncLearningFields, wordEntry } from './learning-exchange'
+import {
+  canonical,
+  digest,
+  validateLearningEntry,
+  type LearningEntry,
+  type LearningReview,
+  scheduleCard,
+} from '../shared/learning-exchange'
 import type { WebState, Word } from './types'
 import { validateWord, limits } from './validation'
 import { sameLearningText } from '../shared/learning-fields'
@@ -10,8 +20,10 @@ export function createLearning(
   persistence: ReturnType<typeof createPersistence>,
   canEdit: () => boolean,
 ) {
+  const learningBusy = ref(false)
   function editable() {
-    if (!canEdit()) throw new Error('当前无法修改，请先处理保存错误或只读状态。')
+    if (!canEdit() || learningBusy.value)
+      throw new Error('当前无法修改，请先处理保存错误或只读状态。')
   }
   async function saveWord(input: Word) {
     editable()
@@ -49,21 +61,66 @@ export function createLearning(
     persistence.mark('words', id)
     if (!(await persistence.persist())) throw new Error(persistence.storageError.value)
   }
-  function enroll(id: string) {
+  // Commit a complete card/history change before replacing the visible word.
+  // A failed write leaves the displayed question and schedule available to retry.
+  async function changeLearning(id: string, change: (entry: LearningEntry) => void) {
     editable()
-    const word = state.words.find((w) => w.id === id)
-    if (!word || word.review) return
-    const entry = word.learning?.entry
-    if (entry) {
-      let card = entry.cards.find((c) => c.direction === 'recognition')
+    learningBusy.value = true
+    try {
+      if (!(await persistence.persist())) throw new Error(persistence.storageError.value)
+      const original = state.words.find((w) => w.id === id)
+      if (!original) throw new Error('词句已不存在。')
+      const word = JSON.parse(JSON.stringify(original)) as Word
+      const entry = await wordEntry(word, state.settings.native)
+      change(entry)
+      entry.updatedAt = Date.now()
+      const checked = validateLearningEntry(entry)
+      word.id = checked.id
+      word.learning = word.learning
+        ? { ...word.learning, entry: checked }
+        : {
+            datasetId: 'a74ef028-c29c-487e-9456-29a8e716b074',
+            recordId: checked.id,
+            fingerprint: await digest(canonical(checked)),
+            entry: checked,
+          }
+      const recognition = checked.cards.find((c) => c.direction === 'recognition' && !c.suspended)
+      word.review = recognition
+        ? {
+            stage: recognition.stage,
+            dueAt: recognition.dueAt,
+            lastReviewedAt: recognition.lastReviewedAt,
+          }
+        : null
+      word.updatedAt = entry.updatedAt
+      const changes = emptyChanges()
+      changes.words.add(id)
+      changes.words.add(word.id)
+      changes.catalog = id !== word.id
+      await saveState(
+        { ...state, words: state.words.map((w) => (w.id === id ? word : w)) },
+        changes,
+      )
+      Object.assign(original, word)
+    } finally {
+      learningBusy.value = false
+    }
+  }
+  async function enroll(id: string, direction: Direction = 'recognition', suspended = false) {
+    await changeLearning(id, (entry) => {
+      if (entry.deletedAt !== null) throw new Error('请先恢复词句。')
+      if (!suspended && !entry.fields.meaning.trim()) throw new Error('请先补充释义，再加入复习。')
+      let card = entry.cards.find((c) => c.direction === direction)
       if (card) {
-        card.suspended = false
-        card.revision++
-      } else {
+        if (card.suspended !== suspended) {
+          card.suspended = suspended
+          card.revision++
+        }
+      } else if (!suspended) {
         card = {
           id: crypto.randomUUID(),
-          entryId: word.id,
-          direction: 'recognition',
+          entryId: entry.id,
+          direction,
           stage: 0,
           dueAt: Date.now(),
           lastReviewedAt: null,
@@ -73,45 +130,48 @@ export function createLearning(
         }
         entry.cards.push(card)
       }
-      word.review = { stage: card.stage, dueAt: card.dueAt, lastReviewedAt: card.lastReviewedAt }
-      entry.updatedAt = Date.now()
-    } else word.review = { stage: 0, dueAt: Date.now(), lastReviewedAt: null }
-    persistence.mark('words', id)
+    })
   }
-  function review(word: Word, remembered: boolean) {
-    editable()
-    const saved = state.words.find((w) => w.id === word.id)
-    if (!saved?.review) return
-    const entry = saved.learning?.entry
-    const card = entry?.cards.find((c) => c.direction === 'recognition' && !c.suspended)
-    if (entry && card) {
-      const at = Date.now(),
-        rating = remembered ? 'remembered' : 'forgot'
-      const before = { ...card },
-        after = scheduleCard(card, rating, at)
+  async function review(
+    word: Word,
+    rating: boolean | LearningReview['rating'],
+    direction: Direction = 'recognition',
+    expectedRevision?: number,
+  ) {
+    const at = Math.max(Date.now(), (latestReview(state.words)?.review.reviewedAt ?? 0) + 1)
+    await changeLearning(word.id, (entry) => {
+      const card = entry.cards.find((c) => c.direction === direction && !c.suspended)
+      if (!card || entry.deletedAt !== null || !entry.fields.meaning.trim())
+        throw new Error('此卡片当前不能复习。')
+      if (expectedRevision !== undefined && card.revision !== expectedRevision)
+        throw new Error('卡片已变化，请重新开始复习。')
+      if (card.dueAt > at) throw new Error('此卡片尚未到复习时间。')
+      const grade = typeof rating === 'boolean' ? (rating ? 'remembered' : 'forgot') : rating
+      const beforeState = { ...card },
+        afterState = scheduleCard(card, grade, at)
       entry.reviews.push({
         id: crypto.randomUUID(),
         cardId: card.id,
-        rating,
+        rating: grade,
         reviewedAt: at,
-        beforeState: before,
-        afterState: after,
+        beforeState,
+        afterState,
         undoneAt: null,
       })
-      Object.assign(card, after)
-      saved.review = { stage: card.stage, dueAt: card.dueAt, lastReviewedAt: card.lastReviewedAt }
-      entry.updatedAt = at
-      persistence.mark('words', saved.id)
-      return
-    }
-    const stage = remembered ? Math.min(6, saved.review.stage + 1) : 0
-    const days = [0, 1, 3, 7, 14, 30, 60][stage]!
-    saved.review = {
-      stage,
-      dueAt: Date.now() + (days ? days * 86400000 : 600000),
-      lastReviewedAt: Date.now(),
-    }
-    persistence.mark('words', saved.id)
+      Object.assign(card, afterState)
+    })
+  }
+  async function undoReview(id: string) {
+    const last = latestReview(state.words)
+    if (!last || last.review.id !== id) throw new Error('只能撤销最近一次评分。')
+    await changeLearning(last.word.id, (entry) => {
+      const record = entry.reviews.find((r) => r.id === id)!
+      const card = entry.cards.find((c) => c.id === record.cardId)
+      if (!card || canonical(card) !== canonical(record.afterState))
+        throw new Error('评分后卡片已有变化，不能覆盖较新的排程。')
+      Object.assign(card, record.beforeState, { revision: card.revision + 1 })
+      record.undoneAt = Math.max(Date.now(), record.reviewedAt)
+    })
   }
   async function restoreWord(id: string) {
     editable()
@@ -122,5 +182,5 @@ export function createLearning(
     persistence.mark('words', word.id)
     if (!(await persistence.persist())) throw new Error(persistence.storageError.value)
   }
-  return { saveWord, removeWord, enroll, review, restoreWord }
+  return { saveWord, removeWord, enroll, review, undoReview, restoreWord, learningBusy }
 }

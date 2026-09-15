@@ -76,6 +76,19 @@ exit 0
             .unwrap()
             .contains("Bonjour?")
     );
+    let list = command().arg("--list-companions").output().unwrap();
+    assert!(String::from_utf8_lossy(&list.stdout).contains("运行中"));
+    let id = Path::new(directory).file_name().unwrap();
+    assert!(
+        !command()
+            .args(["--clean-companions", "--session"])
+            .arg(id)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert!(context.is_file());
     // The fake GUI has exited. The same native CLI emits another hook event.
     child
         .stdin
@@ -113,4 +126,37 @@ exit 0
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success());
     assert!(!String::from_utf8_lossy(&output.stderr).contains("连接"));
+    let list = command().arg("--list-companions").output().unwrap();
+    assert!(String::from_utf8_lossy(&list.stdout).contains("已结束"));
+    // Implicit reconnect must never silently select an ended session.
+    assert!(
+        !command()
+            .arg("--reconnect")
+            .arg("--gui-bin")
+            .arg(&gui)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    // Explicit historical browsing is still available.
+    assert!(
+        command()
+            .arg("--reconnect")
+            .arg("--session")
+            .arg(id)
+            .arg("--gui-bin")
+            .arg(&gui)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        command()
+            .arg("--clean-companions")
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(!Path::new(directory).exists());
 }

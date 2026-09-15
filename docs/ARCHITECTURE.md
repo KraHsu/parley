@@ -50,7 +50,7 @@ IndexedDB v2 使用 `workspace`、`profiles`、`conversations`、`messages`、`w
 
 Web 新备份使用 `.jsonl`：元数据、服务、会话、消息、词句分别成行，以带记录计数的结束行检测截断；导入逐行读取。旧 `.json` 仍可导入，不再采用不对称的 32 MiB 总量限制。两种备份都校验字段和记录数量，排除密钥与协议私有续聊数据。
 
-词句迁移共用 `parley-vocabulary` JSON v3，读入兼容 v1/v2。`src/shared/learning-exchange.ts` 校验来源、卡片和历史，`src/web/learning-exchange.ts` 负责词句投影、预览与合并。Web 在词条内保留完整学习记录，编辑和识义评分同步更新这些记录，其他来源、表达卡片和回收站不会在往返中丢失。完整 Web 工作区备份仍使用独立入口，词句迁移不会改动对话和凭据。
+词句迁移共用 `parley-vocabulary` JSON v3，读入兼容 v1/v2。`src/shared/learning-exchange.ts` 校验来源、卡片和历史，`src/web/learning-exchange.ts` 负责词句投影、预览与合并。Web 在词条内保留完整学习记录，编辑及识义、表达评分同步更新这些记录，多来源、双向卡片和回收站不会在往返中丢失。评分通过独立 IndexedDB 事务先保存，再更新界面；撤销检查卡片版本，防止覆盖后续排程。完整 Web 工作区备份仍使用独立入口，词句迁移不会改动对话和凭据。
 
 ## 凭据辨认与伴随窗口
 
@@ -66,3 +66,5 @@ Web 新备份使用 `.jsonl`：元数据、服务、会话、消息、词句分�
 - Linux 安装包必须通过 `finalize-deb` 与 `check-deb`，使用独立包名和文件路径，避免覆盖 KDE Parley。原生运行与真实服务验收范围见[兼容记录](BACKEND_COMPATIBILITY.md)。
 
 [早期设计](archive/ARCHITECTURE_EARLY.md)保留决策背景。[多后端实现记录](MULTI_BACKEND_IMPLEMENTATION.md)用于查阅历史验证过程，不作为当前模块职责的入口。
+
+伴随会话由 `companion.rs` 管理启动元数据、进程身份和 GUI 当前选择。通过 `sysinfo` 核对 PID、进程启动时间和系统启动时间；Unix 启动器继续使用 `exec`，不增加接管原生终端的父进程。GUI 使用 `CompanionSessions.vue` 切换来源，`TerminalContext.vue` 在切换时卸载并清空旧引用，异步旧请求不能写回新会话。

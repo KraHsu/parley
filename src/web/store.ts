@@ -34,7 +34,12 @@ export function createWebWorkspace() {
   let releaseLock: (() => void) | undefined
   const lane = (pane: Pane) => state.conversations.find((c) => c.id === state.active[pane])!
   const canEdit = computed(
-    () => initialized.value && !readonly.value && !storageError.value && !restoring.value,
+    () =>
+      initialized.value &&
+      !readonly.value &&
+      !storageError.value &&
+      !restoring.value &&
+      !learning.learningBusy.value,
   )
   const describe = (e: unknown) => (e instanceof Error ? e.message : String(e))
   const learning = createLearning(state, persistence, () => canEdit.value)

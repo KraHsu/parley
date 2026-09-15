@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-companion-remove"
+description = "Enables the companion_remove command without any pre-configured scope."
+commands.allow = ["companion_remove"]
+
+[[permission]]
+identifier = "deny-companion-remove"
+description = "Denies the companion_remove command without any pre-configured scope."
+commands.deny = ["companion_remove"]

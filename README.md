@@ -42,7 +42,7 @@ parley-cli
 
 ## 当前进度
 
-目前是 **0.4.0-alpha.2** 预览版。Web 已上线；桌面端验证过 Ubuntu 24.04 amd64，Windows 和 macOS 目前只通过了构建检查，还没完成实际安装和运行测试。API 适配已实现，真实厂商测试还没做，范围见[兼容记录](docs/BACKEND_COMPATIBILITY.md)。
+已发布 **0.4.0-alpha.2** 预览版；当前源码为 **0.4.0-alpha.3**，新增伴随会话管理和 Web 表达复习，升级记录见[安装验证](docs/UPGRADE_VALIDATION.md)。Web 已上线；桌面端验证过 Ubuntu 24.04 amd64，Windows 和 macOS 目前只通过了构建检查，还没完成实际安装和运行测试。API 适配已实现，真实厂商测试还没做，范围见[兼容记录](docs/BACKEND_COMPATIBILITY.md)。
 
 Linux 安装前请看[安装说明](docs/INSTALL.md)：旧的 `Parley_0.3.0_amd64.deb` 与 KDE Parley 包名冲突，修复包使用 `parley-desktop` 包名。
 

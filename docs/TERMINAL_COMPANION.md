@@ -68,7 +68,7 @@ target/debug/parley-cli --backend claude-code --claude /path/to/claude -- --resu
 
 同步只覆盖本次启动后收到的最近十二条消息；恢复会话之前的历史暂不读取。选中词句后可以解释、翻译或保存，界面会显示即将接收引用内容的助手服务。来源用独立的 Claude Code 命名空间保存，避免与 Codex thread 混淆；词句 JSON v3 保留这些来源信息，可以迁移到 Web，同时支持导入旧版 v1/v2。
 
-语法窗口关闭后，原生 CLI 继续运行，本地回调继续保存最近十二条消息。使用 `parley-cli --reconnect` 只重开当前目录最近一次伴随会话的语法窗口，不启动第二个 CLI；多个会话可以用 `--list-companions` 查看，再用 `--reconnect --session ID` 指定。关闭窗口不会再导致 HTTP hook 连接失败。`--no-gui` 完全不添加同步插件；bare / safe 模式或管理策略禁用 hooks 时，终端仍可使用，GUI 显示尚未接收到事件。
+语法窗口关闭后，原生 CLI 继续运行，本地回调继续保存最近十二条消息。使用 `parley-cli --reconnect` 只重开当前目录最近一次仍在运行的伴随会话的语法窗口，不启动第二个 CLI；多个会话可以用 `--list-companions` 查看，再用 `--reconnect --session ID` 指定。关闭窗口不会再导致 HTTP hook 连接失败。`--no-gui` 完全不添加同步插件；bare / safe 模式或管理策略禁用 hooks 时，终端仍可使用，GUI 显示尚未接收到事件。
 
 已验证 Linux 本机 Claude Code `2.1.269` 的 hooks 投递及与已有 Stop hook 共存；另通过原生已登录 TUI 完成两轮真实回复，自动同步到 GUI，并配合 API fixture 答疑及保存终端来源词句。Codex `0.154.0 / gpt-5.6-luna` 也已通过原生 TUI、API fixture 解释、收藏与 GUI 重启恢复。两项组合均从 Linux 开发 deb 解包运行，API 侧尚未调用真实厂商；Windows/macOS 原生窗口仍待验收。详细证据见[多后端实现记录](MULTI_BACKEND_IMPLEMENTATION.md)。
 
@@ -78,4 +78,8 @@ target/debug/parley-cli --backend claude-code --claude /path/to/claude -- --resu
 
 伴随记录位于系统缓存目录下的 `org.parley.desktop/companions/<ID>`；Linux 通常为 `~/.cache/org.parley.desktop/companions`，遵循 `XDG_CACHE_HOME`。每次启动保留启动参数和至多 20 个会话、每会话最近十二条可见消息，每条最多 16,000 字符。Unix 会话目录权限为 0700，文件原子替换并由文件锁串行更新。
 
-缓存允许终端退出后重新查看最近内容，不表示终端仍在线。结束使用后可删除对应 ID 的缓存目录；旧回调不会重建已经删除的目录。缓存不进入词句备份，只有主动收藏的原句随词句导出。
+会话状态使用 PID、进程启动时间和系统启动时间核对，避免把复用的 PID 当作原会话。GUI 每五秒刷新运行状态；CLI 用 `--list-companions` 查看。旧版记录没有进程身份，显示“状态未知”，不会自动重连。
+
+语法窗口与桌面设置中的“伴随会话”可以选择现有终端或历史缓存，也可以取消关联。切换会清空上一个终端的引用内容；已有模型回复进行中时禁止切换。运行中的原生 CLI 不受影响。
+
+`parley-cli --clean-companions` 清理已结束的记录，跳过运行中和状态未知的记录。用 `--clean-companions --session ID` 或 GUI 按钮清理指定历史缓存；运行中及 GUI 当前关联的记录禁止删除。CLI 清理要求关闭 GUI，打开窗口时请使用 GUI 清理入口。旧回调不会重建已经删除的目录。缓存不进入词句备份，只有主动收藏的原句随词句导出。

@@ -66,11 +66,11 @@ defineExpose({ show })
         <blockquote v-if="word.source">{{ word.source.text }}</blockquote>
         <details v-if="word.learning" class="help">
           <summary>
-            迁移记录：{{ word.learning.entry.occurrences.length }} 个来源 ·
+            学习记录：{{ word.learning.entry.occurrences.length }} 个来源 ·
             {{ word.learning.entry.cards.length }} 张卡片 ·
             {{ word.learning.entry.reviews.length }} 次复习
           </summary>
-          <p>Web 可以编辑词句并进行识义复习；其他来源、表达卡片和历史也会保留在导出文件中。</p>
+          <p>识义与表达可分别复习。所有来源、卡片排程、评分和撤销历史都会随词句导出。</p>
           <blockquote v-for="source in word.learning.entry.occurrences.slice(1)" :key="source.id">
             {{ source.snapshot }}
           </blockquote>

@@ -52,3 +52,9 @@
 [首次多后端 CI](https://github.com/KraHsu/parley/actions/runs/34859678767) 的提交为 `a24ab8c`，Windows 因测试路径夹具失败，不能把整次运行标为成功。修复提交 `731a8c9` 的[三平台 CI](https://github.com/KraHsu/parley/actions/runs/34860914892) 全部通过。包含 Claude 同步 ACL 修复的 `1a5525b` 也已通过[三平台 CI](https://github.com/KraHsu/parley/actions/runs/34863338351)。后续修改的状态见验证分支 [Workspace checks](https://github.com/KraHsu/parley/actions/workflows/ci.yml)。构建通过不等于原生运行验收完成。
 
 2026-09-15 的续聊、窗口重连与跨端词句迁移验证见[专项记录](CONTINUITY_AND_TRANSFER.md)。这里的历史三平台 CI 和已发布包记录不代表未发布源码已完成三平台原生验收。
+
+## alpha.3 安装包与本地运行补充
+
+2026-09-15 在隔离 Ubuntu 24.04 amd64 完成 alpha.1 / alpha.2 安装包到 alpha.3 的原位升级，检查真实 Secret Service 凭据、19 张旧数据表、升级备份及原会话续聊。模型服务使用本地 HTTP/SSE fixture。
+
+同一环境中的真实 Tauri/WebKit GUI 验证伴随会话选择、退出状态、缓存清理及取消关联。详细范围与复现脚本见[升级验证](UPGRADE_VALIDATION.md)。这些结果不代表真实厂商 API 或 Windows/macOS 的原生验收。

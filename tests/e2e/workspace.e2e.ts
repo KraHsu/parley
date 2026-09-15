@@ -309,3 +309,61 @@ test('failed learning import keeps original words and the import preview', async
   await expect(page.getByRole('heading', { name: 'break the ice', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Ça marche', exact: true })).toHaveCount(0)
 })
+
+test('practices production without revealing the expression, retries an aborted grade and preserves history after reload', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const original = IDBObjectStore.prototype.put
+    IDBObjectStore.prototype.put = function (...args: Parameters<typeof original>) {
+      const request = original.apply(this, args)
+      if ((window as unknown as { failSave: boolean }).failSave && this.name === 'words')
+        this.transaction.abort()
+      return request
+    }
+  })
+  await ready(page)
+  const editor = await addWord(page)
+  await editor.getByRole('button', { name: '保存词句' }).click()
+  await page.getByRole('button', { name: '加入表达复习', exact: true }).click()
+  await expect(page.getByRole('button', { name: '暂停表达复习' })).toBeVisible()
+  await page.getByRole('button', { name: /^复习 ·/ }).click()
+  await page.getByLabel('复习方向').selectOption('production')
+  await expect(page.getByRole('heading', { name: '打破冷场', exact: true })).toBeVisible()
+  await expect(page.getByText('break the ice', { exact: true })).not.toBeVisible()
+  await page.getByLabel('先试着回忆（可选）').fill('break the ice')
+  await page.getByRole('button', { name: '显示答案' }).click()
+  await expect(page.getByText('break the ice', { exact: true })).toBeVisible()
+  await page.evaluate(() => {
+    ;(window as unknown as { failSave: boolean }).failSave = true
+  })
+  await page.getByRole('button', { name: /^记住了/ }).click()
+  await expect(page.locator('.review-area').getByRole('alert')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '打破冷场', exact: true })).toBeVisible()
+  await page.evaluate(() => {
+    ;(window as unknown as { failSave: boolean }).failSave = false
+  })
+  await page.getByRole('button', { name: /^记住了/ }).click()
+  await expect(page.getByRole('heading', { name: '这一轮完成了。' })).toBeVisible()
+  await page.reload()
+  await page.getByRole('button', { name: /^词句/ }).click()
+  await page.getByRole('button', { name: /^复习 ·/ }).click()
+  await page.getByRole('button', { name: '撤销最近一次评分' }).click()
+  await expect(page.getByRole('heading', { name: '打破冷场', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '显示答案' }).click()
+  await page.getByRole('button', { name: /^吃力/ }).click()
+  // Open the existing migration control and inspect the file users receive.
+  await page.getByText('词句迁移 · Web ↔ 桌面', { exact: true }).click()
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: '导出词句 JSON', exact: true }).click()
+  const file = await download
+  const data = JSON.parse(await readFile((await file.path())!, 'utf8'))
+  expect(data.entries[0].cards[0].direction).toBe('production')
+  expect(data.entries[0].reviews).toHaveLength(2)
+  expect(
+    data.entries[0].reviews.filter((r: { undoneAt: number | null }) => r.undoneAt !== null),
+  ).toHaveLength(1)
+  expect(
+    data.entries[0].reviews.find((r: { undoneAt: number | null }) => r.undoneAt === null).rating,
+  ).toBe('hard')
+})

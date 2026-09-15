@@ -105,6 +105,7 @@ struct CliOptions {
     no_gui: bool,
     reconnect: bool,
     list_companions: bool,
+    clean_companions: bool,
     session: Option<String>,
     help: bool,
     args: Vec<OsString>,
@@ -134,6 +135,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<CliOptions, String>
             Some("--no-gui") => options.no_gui = true,
             Some("--reconnect") => options.reconnect = true,
             Some("--list-companions") => options.list_companions = true,
+            Some("--clean-companions") => options.clean_companions = true,
             Some("--session") => {
                 options.session = Some(
                     args.next()
@@ -161,6 +163,29 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<CliOptions, String>
             "CLI 路径参数与 --backend 不匹配。Claude 请使用 --backend claude-code --claude PATH。"
                 .into(),
         );
+    }
+    if [
+        options.reconnect,
+        options.list_companions,
+        options.clean_companions,
+    ]
+    .into_iter()
+    .filter(|v| *v)
+    .count()
+        > 1
+    {
+        return Err("--reconnect、--list-companions 和 --clean-companions 不能同时使用。".into());
+    }
+    if options.session.is_some() && !options.reconnect && !options.clean_companions {
+        return Err("--session 需要配合 --reconnect 或 --clean-companions。".into());
+    }
+    if (options.reconnect || options.list_companions || options.clean_companions)
+        && (options.no_gui
+            || !options.args.is_empty()
+            || options.codex.is_some()
+            || options.claude.is_some())
+    {
+        return Err("伴随会话管理不接受原生 CLI 参数或路径。".into());
     }
     Ok(options)
 }
@@ -339,6 +364,7 @@ fn run(options: CliOptions) -> Result<i32, String> {
         return Err("CLI 路径不能指向 Parley 启动器自身。".into());
     }
     let mut plugin = None;
+    let mut companion = None;
     if !options.no_gui {
         if data_file().is_ok_and(|path| gui_running(&path)) {
             return Err(
@@ -369,6 +395,7 @@ fn run(options: CliOptions) -> Result<i32, String> {
             "Parley 语法窗口关闭后，可在另一个终端运行 parley-cli --reconnect --session {}。",
             session.id
         );
+        companion = Some(session);
     }
     let mut command = codex_command(&binary);
     if let Some(plugin) = plugin {
@@ -383,14 +410,20 @@ fn run(options: CliOptions) -> Result<i32, String> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
+        let _ = companion; // exec preserves this process identity.
         Err(format!("无法启动 {}：{}", backend.name(), command.exec()))
     }
     #[cfg(not(unix))]
     {
-        let status = command
-            .status()
+        let mut child = command
+            .spawn()
             .map_err(|e| format!("无法启动 {}：{e}", backend.name()))?;
-        Ok(status.code().unwrap_or(1))
+        if let Some(mut session) = companion {
+            if let Err(error) = session.track(child.id()) {
+                eprintln!("无法记录伴随状态：{error}");
+            }
+        }
+        Ok(child.wait().map_err(|e| e.to_string())?.code().unwrap_or(1))
     }
 }
 fn gui_binary(selected: Option<&Path>, current: &Path) -> PathBuf {
@@ -421,6 +454,24 @@ fn reconnect(options: &CliOptions) -> Result<i32, String> {
     )?;
     Ok(0)
 }
+fn clean_companions(id: Option<&str>) -> Result<i32, String> {
+    if data_file().is_ok_and(|path| gui_running(&path)) {
+        return Err("请在已打开的窗口中清理缓存，或先关闭窗口。".into());
+    }
+    let sessions = if let Some(id) = id {
+        vec![crate::companion::Companion::select(Some(id))?]
+    } else {
+        crate::companion::Companion::list()?
+            .into_iter()
+            .filter(|s| s.status() == crate::companion::CompanionStatus::Ended)
+            .collect()
+    };
+    for session in &sessions {
+        session.remove()?;
+    }
+    println!("已清理 {} 个伴随会话缓存。", sessions.len());
+    Ok(0)
+}
 pub fn run_cli() -> i32 {
     // This callback never blocks a native model turn or writes messages into it.
     let mut internal = std::env::args_os().skip(1);
@@ -439,7 +490,7 @@ pub fn run_cli() -> i32 {
     };
     if options.help {
         println!(
-            "Parley — 官方 Codex / Claude Code TUI + 语法助手 GUI\n\n用法：parley-cli [--backend codex|claude-code] [--codex PATH|--claude PATH] [--no-gui] [--gui-bin PATH] [-- NATIVE_ARGS...]\n\n默认运行 Codex。CLI 路径读取设置，或通过参数显式指定。原生参数从 -- 之后或第一个非 Parley 参数开始原样传递。\n\n示例：\n  parley-cli\n  parley-cli --codex /path/to/codex -- resume --last\n  parley-cli --backend claude-code --claude /path/to/claude -- --resume SESSION_ID\n  parley-cli --backend claude-code --no-gui -- --help\n\n重开语法窗口：parley-cli --reconnect（当前目录最近一次伴随会话）\n指定会话：parley-cli --reconnect --session ID\n查看可重连会话：parley-cli --list-companions\n\nClaude 自动同步通过本地 hooks 接收新轮次。关闭 GUI 后继续记录最近六轮，重连不启动第二个原生 CLI。"
+            "Parley — 官方 Codex / Claude Code TUI + 语法助手 GUI\n\n用法：parley-cli [--backend codex|claude-code] [--codex PATH|--claude PATH] [--no-gui] [--gui-bin PATH] [-- NATIVE_ARGS...]\n\n默认运行 Codex。CLI 路径读取设置，或通过参数显式指定。原生参数从 -- 之后或第一个非 Parley 参数开始原样传递。\n\n示例：\n  parley-cli\n  parley-cli --codex /path/to/codex -- resume --last\n  parley-cli --backend claude-code --claude /path/to/claude -- --resume SESSION_ID\n  parley-cli --backend claude-code --no-gui -- --help\n\n重开语法窗口：parley-cli --reconnect（当前目录最近一次运行中的伴随会话）\n指定会话：parley-cli --reconnect --session ID\n查看会话及状态：parley-cli --list-companions\n清理已结束会话缓存：parley-cli --clean-companions\n清理指定历史缓存：parley-cli --clean-companions --session ID\n\nClaude 自动同步通过本地 hooks 接收新轮次。关闭 GUI 后继续记录最近六轮，重连不启动第二个原生 CLI。"
         );
         return 0;
     }
@@ -447,14 +498,17 @@ pub fn run_cli() -> i32 {
         crate::companion::Companion::list().map(|sessions| {
             for session in sessions {
                 println!(
-                    "{}  {}  {}",
+                    "{}  {}  {}  {}",
                     session.id,
+                    session.status().label(),
                     session.backend.key(),
                     session.cwd.display()
                 );
             }
             0
         })
+    } else if options.clean_companions {
+        clean_companions(options.session.as_deref())
     } else if options.reconnect {
         reconnect(&options)
     } else {

@@ -50,7 +50,7 @@ pub struct Snapshot {
 
 #[derive(Default)]
 pub struct TerminalState {
-    directory: Option<std::path::PathBuf>,
+    directory: std::sync::Mutex<Option<std::path::PathBuf>>,
 }
 fn now() -> u64 {
     SystemTime::now()
@@ -261,15 +261,25 @@ pub fn record(directory: &Path, input: impl std::io::Read) -> Result<(), String>
 impl TerminalState {
     pub fn attach(directory: &Path) -> Self {
         Self {
-            directory: Some(directory.to_owned()),
+            directory: std::sync::Mutex::new(Some(directory.to_owned())),
         }
+    }
+    pub fn select(&self, directory: Option<std::path::PathBuf>) -> Result<(), String> {
+        *self.directory.lock().map_err(|e| e.to_string())? = directory;
+        Ok(())
     }
     fn snapshot(&self, thread: Option<&str>) -> Snapshot {
         let data = self
             .directory
-            .as_ref()
-            .ok_or_else(|| "请通过 parley-cli 启动或重连语法窗口。".to_owned())
-            .and_then(|directory| read_data(directory));
+            .lock()
+            .map_err(|e| e.to_string())
+            .and_then(|directory| {
+                directory
+                    .clone()
+                    .as_ref()
+                    .ok_or_else(|| "请通过 parley-cli 启动或重连语法窗口。".to_owned())
+                    .and_then(|directory| read_data(directory))
+            });
         match data {
             Ok(data) => data.snapshot(thread),
             Err(error) => Data {

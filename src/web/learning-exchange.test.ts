@@ -1,3 +1,5 @@
+import 'fake-indexeddb/auto'
+import { saveState } from './storage'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
@@ -95,10 +97,13 @@ describe('learning exchange between desktop and Web', () => {
     entry.reviews = entry.reviews.filter((r) => r.cardId !== recognition.id)
     const persistence = createPersistence(state)
     const learning = createLearning(state, persistence, () => true)
-    learning.review(state.words[0]!, true)
+    recognition.dueAt = 1
+    await saveState(state)
+    await learning.review(state.words[0]!, true)
     persistence.dispose()
     expect(recognition.stage).toBe(5)
-    expect(recognition.dueAt - recognition.lastReviewedAt!).toBe(30 * 86400000)
+    const graded = state.words[0]!.learning!.entry.cards.find((c) => c.direction === 'recognition')!
+    expect(graded.dueAt - graded.lastReviewedAt!).toBe(30 * 86400000)
     await readLearningBackup(await exportLearning(state.words, 'zh-CN'))
   })
   it('rejects corrupt sources, duplicate global IDs, invalid schedules and future formats before merging', async () => {

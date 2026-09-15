@@ -853,16 +853,19 @@ pub async fn codex_open_login(
 #[tauri::command]
 pub async fn codex_terminal_context(
     state: State<'_, crate::backends::manager::BackendState>,
-    options: State<'_, crate::launcher::LaunchOptions>,
+    selection: State<'_, crate::companion::CompanionSelection>,
     thread_id: Option<String>,
     profile_id: Option<String>,
 ) -> Reply {
-    let cwd = options
-        .terminal_cwd
-        .as_deref()
-        .ok_or("请从 parley-cli 启动终端伴随窗口。")?;
+    let cwd = selection
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .map(|session| session.cwd.to_string_lossy().into_owned())
+        .ok_or("请先选择伴随会话。")?;
     let c = get_client(&state.codex, profile_id.as_deref()).await?;
-    terminal_context(&c, cwd, thread_id.as_deref()).await
+    terminal_context(&c, &cwd, thread_id.as_deref()).await
 }
 async fn terminal_context(c: &Client, cwd: &str, thread_id: Option<&str>) -> Reply {
     let result = c.rpc_with_timeout("thread/list", json!({"cwd":cwd,"sourceKinds":["cli"],"limit":50,"sortKey":"updated_at","useStateDbOnly":true}), Duration::from_secs(5), false).await?;
