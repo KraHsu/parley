@@ -418,10 +418,10 @@ fn run(options: CliOptions) -> Result<i32, String> {
         let mut child = command
             .spawn()
             .map_err(|e| format!("无法启动 {}：{e}", backend.name()))?;
-        if let Some(mut session) = companion {
-            if let Err(error) = session.track(child.id()) {
-                eprintln!("无法记录伴随状态：{error}");
-            }
+        if let Some(mut session) = companion
+            && let Err(error) = session.track(child.id())
+        {
+            eprintln!("无法记录伴随状态：{error}");
         }
         Ok(child.wait().map_err(|e| e.to_string())?.code().unwrap_or(1))
     }
