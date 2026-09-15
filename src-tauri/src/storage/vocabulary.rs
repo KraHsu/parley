@@ -419,7 +419,7 @@ impl Storage {
         uuid(&draft.id)?;
         uuid(&draft.request_id)?;
         draft.fields.validate(true)?;
-        bounded(&draft.tag_text, 1200, "标签草稿")?;
+        bounded(&draft.tag_text, 3200, "标签草稿")?;
         if let Some(source) = &draft.occurrence {
             source.validate()?;
         }
@@ -830,7 +830,10 @@ mod tests {
             .execute(&mut legacy)
             .unwrap();
         super::super::migrate(&mut legacy).unwrap();
-        assert_eq!(super::super::schema_version(&mut legacy).unwrap(), 7);
+        assert_eq!(
+            super::super::schema_version(&mut legacy).unwrap(),
+            super::super::MIGRATIONS.len() as i64
+        );
         assert_eq!(
             text(&mut legacy, "SELECT value FROM preferences"),
             r#"{"targetLanguage":"ja"}"#

@@ -1,0 +1,173 @@
+{
+  "format": "parley-vocabulary",
+  "version": 3,
+  "datasetId": "00000000-0000-0000-0000-000000000064",
+  "exportedAt": 1700000005000,
+  "entries": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "fields": {
+        "language": "fr",
+        "languageLabel": "Français",
+        "kind": "phrase",
+        "text": "Ça marche",
+        "meaning": "可以；行得通",
+        "meaningLanguage": "zh-CN",
+        "note": "Keep the whole context."
+      },
+      "createdAt": 1700000000000,
+      "updatedAt": 1700000002000,
+      "deletedAt": null,
+      "occurrences": [
+        {
+          "id": "00000000-0000-0000-0000-00000000000a",
+          "sourceKind": "import",
+          "conversationId": null,
+          "messageId": null,
+          "threadId": "parley-web:original",
+          "turnId": null,
+          "itemId": "00000000-0000-0000-0000-00000000000c",
+          "role": "manual",
+          "selectedText": "Ça marche très bien.",
+          "snapshot": "Ça marche très bien.",
+          "start": 0,
+          "end": 20,
+          "locatorVersion": 1,
+          "truncated": false,
+          "backend": {
+            "kind": "openai_compatible",
+            "provider": "openai",
+            "model": "fixture"
+          },
+          "snapshotHash": "0622a50cdd3ee8ee7a6beea78dfba8ea84c3b06893ea811692d589acd41510a9"
+        },
+        {
+          "id": "00000000-0000-0000-0000-00000000000b",
+          "sourceKind": "terminal",
+          "conversationId": null,
+          "messageId": null,
+          "threadId": "claude-code:fixture",
+          "turnId": null,
+          "itemId": "00000000-0000-0000-0000-00000000000d",
+          "role": "assistant",
+          "selectedText": "Oui, ça marche.",
+          "snapshot": "Oui, ça marche.",
+          "start": 0,
+          "end": 15,
+          "locatorVersion": 1,
+          "truncated": false,
+          "backend": {
+            "kind": "claude_code",
+            "provider": "anthropic",
+            "model": "fixture"
+          },
+          "snapshotHash": "860b0476050557967a9a1987bb44502f6a8699487a12d671c1d2f4b8a4d5f56f"
+        }
+      ],
+      "tags": ["café", "daily"],
+      "cards": [
+        {
+          "id": "00000000-0000-0000-0000-000000000015",
+          "entryId": "00000000-0000-0000-0000-000000000001",
+          "direction": "production",
+          "stage": 1,
+          "dueAt": 1700086401000,
+          "lastReviewedAt": 1700000001000,
+          "suspended": false,
+          "scheduleVersion": 1,
+          "revision": 2
+        },
+        {
+          "id": "00000000-0000-0000-0000-000000000014",
+          "entryId": "00000000-0000-0000-0000-000000000001",
+          "direction": "recognition",
+          "stage": 6,
+          "dueAt": 1705184001000,
+          "lastReviewedAt": 1700000001000,
+          "suspended": false,
+          "scheduleVersion": 2,
+          "revision": 2
+        }
+      ],
+      "reviews": [
+        {
+          "id": "00000000-0000-0000-0000-00000000001e",
+          "cardId": "00000000-0000-0000-0000-000000000014",
+          "rating": "remembered",
+          "reviewedAt": 1700000001000,
+          "beforeState": {
+            "id": "00000000-0000-0000-0000-000000000014",
+            "entryId": "00000000-0000-0000-0000-000000000001",
+            "direction": "recognition",
+            "stage": 5,
+            "dueAt": 1700000000000,
+            "lastReviewedAt": null,
+            "suspended": false,
+            "scheduleVersion": 2,
+            "revision": 1
+          },
+          "afterState": {
+            "id": "00000000-0000-0000-0000-000000000014",
+            "entryId": "00000000-0000-0000-0000-000000000001",
+            "direction": "recognition",
+            "stage": 6,
+            "dueAt": 1705184001000,
+            "lastReviewedAt": 1700000001000,
+            "suspended": false,
+            "scheduleVersion": 2,
+            "revision": 2
+          },
+          "undoneAt": null
+        },
+        {
+          "id": "00000000-0000-0000-0000-00000000001f",
+          "cardId": "00000000-0000-0000-0000-000000000015",
+          "rating": "remembered",
+          "reviewedAt": 1700000001000,
+          "beforeState": {
+            "id": "00000000-0000-0000-0000-000000000015",
+            "entryId": "00000000-0000-0000-0000-000000000001",
+            "direction": "production",
+            "stage": 0,
+            "dueAt": 1700000000000,
+            "lastReviewedAt": null,
+            "suspended": false,
+            "scheduleVersion": 1,
+            "revision": 1
+          },
+          "afterState": {
+            "id": "00000000-0000-0000-0000-000000000015",
+            "entryId": "00000000-0000-0000-0000-000000000001",
+            "direction": "production",
+            "stage": 1,
+            "dueAt": 1700086401000,
+            "lastReviewedAt": 1700000001000,
+            "suspended": false,
+            "scheduleVersion": 1,
+            "revision": 2
+          },
+          "undoneAt": null
+        }
+      ]
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "fields": {
+        "language": "fr",
+        "languageLabel": "Français",
+        "kind": "phrase",
+        "text": "à bientôt",
+        "meaning": "可以；行得通",
+        "meaningLanguage": "zh-CN",
+        "note": "Keep the whole context."
+      },
+      "createdAt": 1700000000000,
+      "updatedAt": 1700000002000,
+      "deletedAt": 1700000003000,
+      "occurrences": [],
+      "tags": ["café", "daily"],
+      "cards": [],
+      "reviews": []
+    }
+  ]
+}

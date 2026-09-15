@@ -6,6 +6,7 @@ import {
   type Conversation,
   type Message,
 } from './types'
+import { validateOrigin } from './learning-exchange'
 import { boundedText, normalizeTags } from '../shared/learning-fields'
 
 export type ValidationMode = 'backup' | 'load' | 'save'
@@ -76,14 +77,18 @@ export function validateWord(input: unknown): Word {
   const w = object(input)
   const s = w.source == null ? null : object(w.source)
   const r = w.review == null ? null : object(w.review)
+  const origin = w.learning === undefined ? undefined : validateOrigin(w.learning)
+  if (origin) assert(origin.entry.id === w.id, '词句迁移记录标识')
   if (r)
     assert(Number.isInteger(r.stage) && Number(r.stage) >= 0 && Number(r.stage) <= 6, '复习阶段')
   return {
+    ...(origin === undefined ? {} : { learning: origin }),
+    ...(w.updatedAt === undefined ? {} : { updatedAt: time(w.updatedAt) }),
     id: text(w.id, 100),
     text: text(w.text, 10000, '词句'),
     language: text(w.language, 100, '语言代码'),
     meaning: text(w.meaning, 10000, '释义'),
-    note: text(w.note, 10000, '注释'),
+    note: text(w.note, 16000, '注释'),
     tags: normalizeTags(w.tags),
     createdAt: time(w.createdAt),
     source: s

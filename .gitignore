@@ -29,3 +29,7 @@ artifacts/
 # Demo production stays local; never publish it with the app.
 public/demo/
 scripts/marketing/
+
+# Native validation helpers
+__pycache__/
+*.py[cod]

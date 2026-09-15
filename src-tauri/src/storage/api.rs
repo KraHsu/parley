@@ -20,6 +20,71 @@ impl From<CredentialRow> for CredentialReference {
     }
 }
 impl Storage {
+    pub fn credential_scope(
+        &self,
+        profile: &BackendProfile,
+        key: &str,
+        verified_previous_scope: Option<&str>,
+    ) -> Result<String> {
+        use super::schema::{
+            backend_credential_salts as salts, backend_credential_scopes as scopes,
+        };
+        use diesel::prelude::*;
+        use sha2::{Digest, Sha256};
+        self.typed_transaction(|db| {
+            let current = super::backends::typed_profile(db, &profile.id)?;
+            if current.revision != profile.revision || !current.config.enabled {
+                return Err("服务配置已改变，请重新读取后重试。".into());
+            }
+            diesel::insert_into(salts::table)
+                .values((
+                    salts::profile_id.eq(&profile.id),
+                    salts::salt.eq(uuid::Uuid::new_v4().to_string()),
+                ))
+                .on_conflict_do_nothing()
+                .execute(db)?;
+            let salt = salts::table
+                .find(&profile.id)
+                .select(salts::salt)
+                .first::<String>(db)?;
+            // Length prefixes prevent ambiguous concatenation. Hash directly so no
+            // additional non-zeroizing allocation contains the plaintext key.
+            let mut hash = Sha256::new();
+            for field in [
+                "parley-credential-v1",
+                &salt,
+                &profile.id,
+                &profile.config.endpoint,
+                key,
+            ] {
+                hash.update((field.len() as u64).to_be_bytes());
+                hash.update(field.as_bytes());
+            }
+            let fingerprint = format!("{:x}", hash.finalize());
+            let identity = (&profile.id, &fingerprint);
+            if let Some(scope) = scopes::table
+                .find(identity)
+                .select(scopes::scope)
+                .first::<String>(db)
+                .optional()?
+            {
+                return Ok(scope);
+            }
+            // Upgrade an existing key only after the credential layer has compared
+            // it with the session or system-store key, never from conversation data.
+            let scope = verified_previous_scope
+                .map(str::to_owned)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            diesel::insert_into(scopes::table)
+                .values((
+                    scopes::profile_id.eq(&profile.id),
+                    scopes::fingerprint.eq(fingerprint),
+                    scopes::scope.eq(&scope),
+                ))
+                .execute(db)?;
+            Ok(scope)
+        })
+    }
     pub fn claude_session_directory(&self, turn: &TurnSnapshot) -> Result<PathBuf> {
         use sha2::{Digest, Sha256};
         let identity = serde_json::to_vec(&(
@@ -44,13 +109,6 @@ impl Storage {
                 .map_err(error)?;
         }
         Ok(directory)
-    }
-    pub fn check_profile_revision(&self, id: &str, revision: i64) -> Result<()> {
-        let profile = self.backend_profile(id)?;
-        if profile.revision != revision || !profile.config.enabled {
-            return Err("服务配置已改变，请重新读取后重试。".into());
-        }
-        Ok(())
     }
     pub fn credential_reference(&self, profile: &str) -> Result<Option<CredentialReference>> {
         use super::schema::backend_credentials as k;

@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import MessageList from './features/chat/MessageList.vue'
 import TutorPanel from './features/tutor/TutorPanel.vue'
-import TerminalContext from './features/terminal/TerminalContext.vue'
+import CompanionSessions from './features/terminal/CompanionSessions.vue'
 import VocabularyPanel from './features/vocabulary/VocabularyPanel.vue'
 import VocabularyEditor from './features/vocabulary/VocabularyEditor.vue'
 import { useVocabularyStore } from './features/vocabulary/store'
@@ -61,9 +61,7 @@ const assistantLabel = computed(() => codex.paneLabel('tutor'))
     <header class="tutor-app-header">
       <div>
         <strong>parley<span>.</span></strong>
-        <p>
-          {{ terminalBackend === 'claude-code' ? 'Claude Code' : 'Codex' }} 在终端，语言答疑在这里。
-        </p>
+        <p>原生对话在终端，语言答疑在这里。</p>
       </div>
       <button class="secondary-button" @click="dialog?.showModal()">
         设置 · {{ assistantLabel }}
@@ -111,12 +109,7 @@ const assistantLabel = computed(() => codex.paneLabel('tutor'))
         复习
       </button>
     </nav>
-    <TerminalContext
-      v-if="terminalCwd"
-      v-show="view === 'tutor'"
-      :started-at="terminalStartedAt ?? 0"
-      :backend="terminalBackend"
-    />
+    <CompanionSessions v-show="view === 'tutor'" />
     <main class="tutor-app-body">
       <section
         v-if="view === 'source-main'"

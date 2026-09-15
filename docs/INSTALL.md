@@ -75,7 +75,7 @@ npm run package:linux
 
 产物及对应 `SHA256SUMS` 位于 `target/release/bundle/deb/`，包含 `parley-desktop`、`parley-cli` 启动命令、应用菜单入口和安装文档。真实程序放在 `/usr/lib/parley-desktop/`，保留 CLI 与 GUI 的相邻路径；图标和文档使用独立名称。应用标识与学习数据目录不变。当前打包依赖下限针对 Ubuntu 24.04 构建环境；更换构建系统时应重新检查动态库依赖。
 
-开发包文件名为 `ParleyDesktop_0.4.0-alpha.2_amd64.deb`；Debian 包内版本使用 `0.4.0~alpha.2`，保证版本顺序为 `0.3.0 < 0.4.0~alpha.2 < 0.4.0`。`npm run package:linux` 会在 Tauri 打包后完成版本转换并生成校验文件。安装包以预发布形式提供；真实厂商与其他平台的验收状态见兼容记录。
+开发包文件名为 `ParleyDesktop_0.4.0-alpha.3_amd64.deb`；Debian 包内版本使用 `0.4.0~alpha.3`，保证版本顺序为 `0.4.0~alpha.2 < 0.4.0~alpha.3 < 0.4.0`。`npm run package:linux` 会在 Tauri 打包后完成版本转换并生成校验文件。已发布安装包以预发布形式提供；真实厂商与其他平台的验收状态见兼容记录。
 
 ## 修复旧包与 KDE Parley 的命名冲突
 
@@ -91,6 +91,18 @@ bash scripts/repair-installed-parley.sh "$PWD/target/release/bundle/deb/ParleyDe
 
 脚本会检查已安装的 `parley` 版本：如果仍是我们的旧 0.x 版本，在安装修复包的同一事务中用 `parley-` 显式移除旧包，避免 APT 误选 KDE 升级；如果已经是 KDE 版本，先运行 `sudo apt-get install -f` 完成被打断的系统事务，再安装修复包并检查 APT 状态。若本机已有本项目的 WebKit VBlank 启动器补丁，会备份并更新其可执行路径与图标，保留性能设置。它不会自动清理软件包、禁用源或删除学习记录。`apt-get -f` 用于修复损坏的依赖关系，详见 [Ubuntu APT 手册](https://manpages.ubuntu.com/manpages/noble/man8/apt-get.8.html)。
 
-修复包包含此前的 Web/GUI 文本选择与任务提示修复。当前版本会升级旧工作区到 schema 7，旧版不能直接打开升级后的数据库；第一次启动前保留数据备份。真实模型 API 调用仍按要求暂缓实测。
+修复包包含此前的 Web/GUI 文本选择与任务提示修复。已发布的 alpha.2 会升级旧工作区到 schema 7；当前开发版 alpha.3 会升级到 schema 9，旧版不能直接打开升级后的数据库；第一次启动前保留数据备份。真实模型 API 调用仍按要求暂缓实测。
 
 打包验收：隔离 Ubuntu 24.04 中复现了旧包与 KDE 图标的覆盖错误；依次修复依赖、安装新包后，KDE `parley` / `parley-data` 与 `parley-desktop` 共存且 `apt-get check` 通过。另验证了旧 0.3.0 包的显式迁移、保留学习数据目录、`parley-cli --help` 和安装文件校验。发布脚本检查独立包名、私有程序路径、图标、桌面入口及全部 payload 校验和；新包与 Ubuntu 两个同名包的文件路径交集为空。未在本机执行需要 sudo 密码的实际修复，也未调用真实模型 API。
+
+## 从 alpha.1 / alpha.2 升级到当前开发包
+
+先关闭 Parley 窗口，再安装本地构建的 `ParleyDesktop_0.4.0-alpha.3_amd64.deb`：
+
+```bash
+sudo apt install ./ParleyDesktop_0.4.0-alpha.3_amd64.deb
+```
+
+已有的 `parley-desktop` 会原位升级，无需移除。首次启动将 schema 7 升到 9，并在同一数据目录留下 `parley-before-v9-<ID>.sqlite3` 完整备份；设置、历史、词句、复习和系统凭据保留。旧版无法打开 schema 9；回退前需关闭应用，保存当前数据库，再用升级前备份恢复旧数据。
+
+新版词句 JSON v3 和 Web 工作区备份 format 3 需要新版客户端。旧 JSON 格式仍可导入。实际升级检查与复现方式见[升级验证](UPGRADE_VALIDATION.md)。

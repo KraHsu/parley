@@ -310,7 +310,7 @@ export const useVocabularyStore = defineStore('vocabulary', () => {
           occurrence: draft.occurrence,
           draftId: draft.id,
           allowDuplicate: draft.allowDuplicate,
-          tags: parseTags(draft.tagText, 20, 50),
+          tags: parseTags(draft.tagText),
         },
       })
       if (result.duplicate) {

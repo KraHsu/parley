@@ -30,6 +30,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/005_api_turns.sql"),
     include_str!("../migrations/006_source_backends.sql"),
     include_str!("../migrations/007_conversation_context.sql"),
+    include_str!("../migrations/008_credential_identity.sql"),
+    include_str!("../migrations/009_learning_exchange.sql"),
 ];
 
 #[derive(Clone)]

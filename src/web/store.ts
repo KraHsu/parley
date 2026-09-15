@@ -4,6 +4,7 @@ import { exportBackup, importState, loadState, saveState, readRawState } from '.
 import { boundedText } from '../shared/learning-fields'
 import { createPersistence } from './persistence'
 import { createLearning } from './learning'
+import { exportLearning, mergeLearning, type LearningPreview } from './learning-exchange'
 import { validateState, validateProfile, limits } from './validation'
 import {
   initialState,
@@ -33,7 +34,12 @@ export function createWebWorkspace() {
   let releaseLock: (() => void) | undefined
   const lane = (pane: Pane) => state.conversations.find((c) => c.id === state.active[pane])!
   const canEdit = computed(
-    () => initialized.value && !readonly.value && !storageError.value && !restoring.value,
+    () =>
+      initialized.value &&
+      !readonly.value &&
+      !storageError.value &&
+      !restoring.value &&
+      !learning.learningBusy.value,
   )
   const describe = (e: unknown) => (e instanceof Error ? e.message : String(e))
   const learning = createLearning(state, persistence, () => canEdit.value)
@@ -328,6 +334,34 @@ export function createWebWorkspace() {
       error.value = describe(e)
     }
   }
+  async function downloadLearning() {
+    try {
+      if (!(await persist())) throw new Error(storageError.value)
+      downloadBlob(await exportLearning(state.words, state.settings.native), 'words.json')
+    } catch (e) {
+      error.value = describe(e)
+    }
+  }
+  async function importLearning(preview: LearningPreview, copyConflicts: boolean) {
+    if (!canEdit.value || busy.main || busy.tutor) return false
+    restoring.value = true
+    error.value = ''
+    try {
+      if (!(await persistence.persist())) return false
+      const words = await mergeLearning(preview, state.words, copyConflicts)
+      const clean = validateState({ ...state, words }, 'save')
+      // Commit the merged workspace before exposing it; preserve API keys and chats.
+      await saveState(clean)
+      state.words = clean.words
+      notice.value = `词句导入完成。已有对话和 API 配置保留。`
+      return true
+    } catch (e) {
+      error.value = describe(e)
+      return false
+    } finally {
+      restoring.value = false
+    }
+  }
   async function downloadRaw() {
     try {
       downloadBlob(
@@ -436,6 +470,8 @@ export function createWebWorkspace() {
     repairTags,
     parseBackup,
     restore,
+    downloadLearning,
+    importLearning,
     dispose,
   })
 }

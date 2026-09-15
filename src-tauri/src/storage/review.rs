@@ -54,12 +54,12 @@ pub(super) fn put_card(db: &mut SqliteConnection, card: &Card) -> Result<()> {
     Ok(())
 }
 pub(super) fn set_tags(db: &mut SqliteConnection, id: &str, values: &[String]) -> Result<()> {
-    if values.len() > 20 {
-        return Err("每条词句最多 20 个标签。".into());
+    if values.len() > 30 {
+        return Err("每条词句最多 30 个标签。".into());
     }
     let mut names = std::collections::BTreeSet::new();
     for tag in values {
-        bounded(tag, 50, "标签")?;
+        bounded(tag, 100, "标签")?;
         if !tag.trim().is_empty() {
             names.insert(normalized(tag.trim()));
         }

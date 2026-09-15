@@ -70,7 +70,9 @@ pub struct TagsRequest {
 }
 
 pub fn schedule(card: &Card, rating: &str, now: i64) -> Result<Card> {
-    if card.schedule_version != 1 || card.stage > 5 {
+    if ![1, 2].contains(&card.schedule_version)
+        || card.stage > if card.schedule_version == 1 { 5 } else { 6 }
+    {
         return Err("不支持的复习排程版本。".into());
     }
     let mut next = card.clone();
@@ -82,8 +84,9 @@ pub fn schedule(card: &Card, rating: &str, now: i64) -> Result<Card> {
         }
         "hard" => day,
         "remembered" => {
-            next.stage = (card.stage + 1).min(5);
-            [1, 3, 7, 14, 30][card.stage.min(4) as usize] * day
+            let max = if card.schedule_version == 1 { 5 } else { 6 };
+            next.stage = (card.stage + 1).min(max);
+            [1, 3, 7, 14, 30, 60][card.stage.min(max - 1) as usize] * day
         }
         _ => return Err("请选择忘记、吃力或记住。".into()),
     };

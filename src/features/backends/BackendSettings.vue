@@ -371,6 +371,9 @@ function modelChoices(pane: 'main' | 'tutor') {
             <option :value="false">仅本次会话</option>
           </select></label
         >
+        <p v-if="config.kind !== 'codex'" class="settings-help">
+          重新填写同一密钥可以继续原对话；换成其他密钥时，请新建对话或带入可见历史。
+        </p>
         <label
           ><input v-model="config.enabled" type="checkbox" :disabled="busy" /> 启用此服务</label
         >

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-companion-select"
+description = "Enables the companion_select command without any pre-configured scope."
+commands.allow = ["companion_select"]
+
+[[permission]]
+identifier = "deny-companion-select"
+description = "Denies the companion_select command without any pre-configured scope."
+commands.deny = ["companion_select"]

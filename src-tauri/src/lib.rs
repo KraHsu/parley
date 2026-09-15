@@ -1,6 +1,7 @@
 mod backends;
 mod chat;
 mod codex;
+mod companion;
 mod exchange;
 mod launcher;
 mod review;
@@ -34,18 +35,21 @@ pub fn run() {
             app.manage(storage::StorageState::new(path));
             let terminal = app
                 .state::<launcher::LaunchOptions>()
-                .terminal_ready
+                .terminal_session
                 .as_ref()
-                .map(|path| terminal::TerminalState::start(path))
-                .transpose();
-            match terminal {
-                Ok(value) => {
-                    app.manage(value.unwrap_or_default());
-                }
-                Err(_) => {
-                    app.manage(terminal::TerminalState::default());
-                }
-            }
+                .map(|path| terminal::TerminalState::attach(path))
+                .unwrap_or_default();
+            let selected = app
+                .state::<launcher::LaunchOptions>()
+                .terminal_session
+                .as_ref()
+                .and_then(|path| path.file_name())
+                .and_then(|id| id.to_str())
+                .and_then(|id| companion::Companion::select(Some(id)).ok());
+            app.manage(companion::CompanionSelection(std::sync::Mutex::new(
+                selected,
+            )));
+            app.manage(terminal);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -60,6 +64,9 @@ pub fn run() {
             backends::manager::backend_stop,
             backends::manager::backend_disconnect,
             launcher::get_launch_options,
+            companion::companion_list,
+            companion::companion_select,
+            companion::companion_remove,
             terminal::claude_terminal_context,
             codex::codex_connect,
             codex::codex_disconnect,

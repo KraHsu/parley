@@ -1,21 +1,14 @@
 //! Native Claude terminal hooks. No model calls, transcript reads, or prompt injection.
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::VecDeque,
     path::Path,
-    sync::{Arc, Mutex},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::State;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
-    sync::Semaphore,
-};
-
 const MAX_BODY: usize = 256 * 1024;
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Message {
     id: String,
@@ -25,6 +18,7 @@ struct Message {
     text: String,
     truncated: bool,
 }
+#[derive(Serialize, Deserialize)]
 struct Session {
     id: String,
     title: String,
@@ -32,7 +26,7 @@ struct Session {
     messages: VecDeque<Message>,
     turn: String,
 }
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 struct Data {
     sessions: VecDeque<Session>,
     received: bool,
@@ -56,16 +50,7 @@ pub struct Snapshot {
 
 #[derive(Default)]
 pub struct TerminalState {
-    data: Arc<Mutex<Data>>,
-    _plugin: Option<tempfile::TempDir>,
-    task: Option<tauri::async_runtime::JoinHandle<()>>,
-}
-impl Drop for TerminalState {
-    fn drop(&mut self) {
-        if let Some(task) = &self.task {
-            task.abort();
-        }
-    }
+    directory: std::sync::Mutex<Option<std::path::PathBuf>>,
 }
 fn now() -> u64 {
     SystemTime::now()
@@ -165,7 +150,7 @@ impl Data {
     fn snapshot(&self, thread: Option<&str>) -> Snapshot {
         let notice = self.error.clone().unwrap_or_else(|| {
             if self.received {
-                "已接收 Claude 终端事件；显示本次启动后收到的最近六轮，不包含启动前历史。"
+                "已接收 Claude 终端事件；显示本次终端启动后收到的最近六轮（关闭语法窗口期间也会同步），不包含启动前历史。"
             } else {
                 "尚未收到 Claude 终端事件。若已开始对话，请检查 /hooks；bare、安全模式或组织策略可能禁用同步。"
             }.into()
@@ -191,15 +176,16 @@ impl Data {
         }
     }
 }
-fn plugin(directory: &Path, url: &str, token: &str) -> Result<(), String> {
+// The callback is a short-lived native process, independent of the GUI. Only the
+// bounded visible-message snapshot is retained; raw hook payloads are never saved.
+pub fn plugin(directory: &Path, launcher: &Path) -> Result<(), String> {
     std::fs::create_dir_all(directory.join(".claude-plugin")).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(directory.join("hooks")).map_err(|e| e.to_string())?;
-    let manifest = json!({"name":format!("parley-terminal-{}",uuid::Uuid::new_v4()),"version":"0.1.0","description":"Local language-learning terminal context"});
-    std::fs::write(
-        directory.join(".claude-plugin/plugin.json"),
-        manifest.to_string(),
-    )
-    .map_err(|e| e.to_string())?;
+    let manifest = json!({"name":format!("parley-terminal-{}",uuid::Uuid::new_v4()),"version":"0.2.0","description":"Local language-learning terminal context"});
+    crate::exchange::write_atomic(
+        &directory.join(".claude-plugin/plugin.json"),
+        manifest.to_string().as_bytes(),
+    )?;
     let mut hooks = json!({});
     for event in [
         "SessionStart",
@@ -208,173 +194,108 @@ fn plugin(directory: &Path, url: &str, token: &str) -> Result<(), String> {
         "StopFailure",
         "SessionEnd",
     ] {
-        hooks[event] = json!([{"hooks":[{"type":"http","url":url,"headers":{"Authorization":format!("Bearer {token}")},"timeout":1}]}]);
+        // Exec form has no shell interpolation, including on Windows.
+        hooks[event] = json!([{"hooks":[{"type":"command","command":launcher,"args":["--terminal-event",directory],"timeout":2}]}]);
     }
-    std::fs::write(
-        directory.join("hooks/hooks.json"),
-        json!({"hooks":hooks}).to_string(),
+    crate::exchange::write_atomic(
+        &directory.join("hooks/hooks.json"),
+        json!({"hooks":hooks}).to_string().as_bytes(),
     )
-    .map_err(|e| e.to_string())?;
-    Ok(())
+}
+fn read_data(directory: &Path) -> Result<Data, String> {
+    use std::io::Read;
+    let file = match std::fs::File::open(directory.join("context.json")) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Data::default()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut bytes = Vec::new();
+    file.take(32 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > 32 * 1024 * 1024 {
+        return Err("终端同步记录过大。".into());
+    }
+    serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+}
+pub fn record(directory: &Path, input: impl std::io::Read) -> Result<(), String> {
+    use std::io::Read;
+    // Only attach to a directory created by the launcher. Never create a missing
+    // session from a stale hook after the user has removed its cached context.
+    if !directory.join("companion.json").is_file() {
+        return Ok(());
+    }
+    let mut bytes = Vec::new();
+    input
+        .take(MAX_BODY as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(directory.join("context.lock"))
+        .map_err(|e| e.to_string())?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    while lock.try_lock().is_err() {
+        if std::time::Instant::now() >= deadline {
+            return Err("终端同步正忙。".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let mut data = read_data(directory)?;
+    let result = if bytes.len() > MAX_BODY {
+        Err("终端事件超过 256 KiB，本次内容未同步。".into())
+    } else {
+        serde_json::from_slice(&bytes)
+            .map_err(|_| "终端事件 JSON 无效。".to_owned())
+            .and_then(|event| data.accept(event))
+    };
+    data.error = result.err();
+    crate::exchange::write_atomic(
+        &directory.join("context.json"),
+        &serde_json::to_vec(&data).map_err(|e| e.to_string())?,
+    )
 }
 impl TerminalState {
-    pub fn start(ready: &Path) -> Result<Self, String> {
-        // The launcher creates this private empty file; do not create arbitrary paths.
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(ready)
-            .map_err(|e| e.to_string())?;
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-        listener.set_nonblocking(true).map_err(|e| e.to_string())?;
-        let url = format!(
-            "http://{}/terminal-hooks",
-            listener.local_addr().map_err(|e| e.to_string())?
-        );
-        let token = format!(
-            "{}{}",
-            uuid::Uuid::new_v4().simple(),
-            uuid::Uuid::new_v4().simple()
-        );
-        let directory = tempfile::Builder::new()
-            .prefix("parley-terminal-")
-            .tempdir()
-            .map_err(|e| e.to_string())?;
-        plugin(directory.path(), &url, &token)?;
-        let data = Arc::new(Mutex::new(Data::default()));
-        let state = data.clone();
-        let task = tauri::async_runtime::spawn(async move {
-            let Ok(listener) = TcpListener::from_std(listener) else {
-                return;
-            };
-            let capacity = Arc::new(Semaphore::new(8));
-            while let Ok((socket, peer)) = listener.accept().await {
-                if !peer.ip().is_loopback() {
-                    continue;
-                }
-                let Ok(permit) = capacity.clone().try_acquire_owned() else {
-                    continue;
-                };
-                let state = state.clone();
-                let token = token.clone();
-                tokio::spawn(async move {
-                    let _permit = permit;
-                    let _ = tokio::time::timeout(
-                        Duration::from_secs(2),
-                        receive(socket, &token, &state),
-                    )
-                    .await;
-                });
+    pub fn attach(directory: &Path) -> Self {
+        Self {
+            directory: std::sync::Mutex::new(Some(directory.to_owned())),
+        }
+    }
+    pub fn select(&self, directory: Option<std::path::PathBuf>) -> Result<(), String> {
+        *self.directory.lock().map_err(|e| e.to_string())? = directory;
+        Ok(())
+    }
+    fn snapshot(&self, thread: Option<&str>) -> Snapshot {
+        let data = self
+            .directory
+            .lock()
+            .map_err(|e| e.to_string())
+            .and_then(|directory| {
+                directory
+                    .clone()
+                    .as_ref()
+                    .ok_or_else(|| "请通过 parley-cli 启动或重连语法窗口。".to_owned())
+                    .and_then(|directory| read_data(directory))
+            });
+        match data {
+            Ok(data) => data.snapshot(thread),
+            Err(error) => Data {
+                error: Some(error),
+                ..Data::default()
             }
-        });
-        use std::io::Write;
-        let written = file
-            .write_all(
-                json!({"pluginPath":directory.path()})
-                    .to_string()
-                    .as_bytes(),
-            )
-            .and_then(|_| file.sync_all());
-        if let Err(error) = written {
-            task.abort();
-            return Err(error.to_string());
-        }
-        Ok(Self {
-            data,
-            _plugin: Some(directory),
-            task: Some(task),
-        })
-    }
-}
-async fn receive(
-    mut socket: TcpStream,
-    token: &str,
-    data: &Arc<Mutex<Data>>,
-) -> Result<(), String> {
-    let mut bytes = Vec::new();
-    let mut buffer = [0; 4096];
-    let end = loop {
-        let n = socket.read(&mut buffer).await.map_err(|_| "读取事件失败")?;
-        if n == 0 {
-            return Err("事件连接已关闭".into());
-        }
-        bytes.extend_from_slice(&buffer[..n]);
-        if let Some(i) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
-            if i > 8192 {
-                return Err("事件头过大".into());
-            }
-            break i + 4;
-        }
-        if bytes.len() > 8192 {
-            return Err("事件头过大".into());
-        }
-    };
-    let headers = std::str::from_utf8(&bytes[..end]).map_err(|_| "事件头无效")?;
-    let mut auth = false;
-    let mut length = None;
-    if !headers.starts_with("POST /terminal-hooks HTTP/1.1\r\n") {
-        return Err("事件路径无效".into());
-    }
-    for line in headers.lines().skip(1) {
-        if let Some((name, value)) = line.split_once(':') {
-            match name.to_ascii_lowercase().as_str() {
-                "authorization" => auth = value.trim() == format!("Bearer {token}"),
-                "content-length" => {
-                    if length.is_some() {
-                        return Err("重复长度".into());
-                    }
-                    length = value.trim().parse::<usize>().ok();
-                }
-                "transfer-encoding" | "origin" => return Err("不接受浏览器或分块事件".into()),
-                _ => {}
-            }
+            .snapshot(thread),
         }
     }
-    if !auth {
-        return Err("事件认证无效".into());
-    }
-    let Some(length) = length.filter(|n| *n <= MAX_BODY) else {
-        data.lock().unwrap().error = Some("终端事件过大或长度无效，本次内容未能同步。".into());
-        return Err("事件长度无效".into());
-    };
-    while bytes.len() < end + length {
-        let n = socket.read(&mut buffer).await.map_err(|_| "读取事件失败")?;
-        if n == 0 {
-            return Err("事件正文不完整".into());
-        }
-        bytes.extend_from_slice(&buffer[..n]);
-    }
-    let event: Value =
-        serde_json::from_slice(&bytes[end..end + length]).map_err(|_| "事件 JSON 无效")?;
-    let updates_text = matches!(
-        event["hook_event_name"].as_str(),
-        Some("UserPromptSubmit" | "Stop")
-    );
-    {
-        let mut data = data.lock().unwrap();
-        if let Err(error) = data.accept(event) {
-            data.error = Some(format!(
-                "终端事件未能同步：{error}。请检查 CLI 版本和 hooks 状态。"
-            ));
-            return Err(error);
-        }
-        if updates_text {
-            data.error = None;
-        }
-    }
-    socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.map_err(|_|"事件响应失败")?;
-    Ok(())
 }
 #[tauri::command]
 pub fn claude_terminal_context(
     state: State<'_, TerminalState>,
     thread_id: Option<String>,
 ) -> Snapshot {
-    let mut snapshot = state.data.lock().unwrap().snapshot(thread_id.as_deref());
-    if state.task.is_none() {
-        snapshot.notice = "终端同步接收器未启动，请通过 parley-cli 重新打开伴随窗口。".into();
-    }
-    snapshot
+    state.snapshot(thread_id.as_deref())
 }
 
 #[cfg(test)]
@@ -406,55 +327,63 @@ mod tests {
             "claude-code:session"
         );
     }
-    #[tokio::test]
-    async fn loopback_auth_size_limits_and_empty_hook_response() {
-        let ready = tempfile::NamedTempFile::new().unwrap();
-        let state = TerminalState::start(ready.path()).unwrap();
-        let metadata: Value =
-            serde_json::from_slice(&std::fs::read(ready.path()).unwrap()).unwrap();
+    #[test]
+    fn callbacks_continue_without_gui_and_reopened_window_recovers_context() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("companion.json"), "{}").unwrap();
+        let event = |name: &str, field: &str, text: &str| {
+            json!({"session_id":"session","hook_event_name":name,field:text}).to_string()
+        };
+        record(
+            directory.path(),
+            event("UserPromptSubmit", "prompt", "Bonjour?").as_bytes(),
+        )
+        .unwrap();
+        let window = TerminalState::attach(directory.path());
+        assert_eq!(
+            window.snapshot(Some("claude-code:session")).messages.len(),
+            1
+        );
+        drop(window);
+        record(
+            directory.path(),
+            event("Stop", "last_assistant_message", "Bonjour 🌍").as_bytes(),
+        )
+        .unwrap();
+        let reopened = TerminalState::attach(directory.path());
+        let snapshot = reopened.snapshot(Some("claude-code:session"));
+        assert_eq!(snapshot.messages.len(), 2);
+        assert_eq!(snapshot.messages[1].text, "Bonjour 🌍");
+        record(directory.path(), vec![b'x'; MAX_BODY + 1].as_slice()).unwrap();
+        assert!(reopened.snapshot(None).notice.contains("256 KiB"));
+        assert_eq!(
+            reopened
+                .snapshot(Some("claude-code:session"))
+                .messages
+                .len(),
+            2
+        );
+        record(
+            directory.path(),
+            event("Stop", "last_assistant_message", "Salut").as_bytes(),
+        )
+        .unwrap();
+        assert!(!reopened.snapshot(None).notice.contains("256 KiB"));
+    }
+    #[test]
+    fn plugin_uses_direct_arguments_and_does_not_depend_on_a_listening_window() {
+        let directory = tempfile::tempdir().unwrap();
+        let launcher = directory.path().join("a ' $weird` launcher");
+        plugin(directory.path(), &launcher).unwrap();
         let hooks: Value = serde_json::from_slice(
-            &std::fs::read(
-                Path::new(metadata["pluginPath"].as_str().unwrap()).join("hooks/hooks.json"),
-            )
-            .unwrap(),
+            &std::fs::read(directory.path().join("hooks/hooks.json")).unwrap(),
         )
         .unwrap();
         let hook = &hooks["hooks"]["Stop"][0]["hooks"][0];
-        let url = hook["url"].as_str().unwrap();
-        let key = hook["headers"]["Authorization"].as_str().unwrap();
-        let client = reqwest::Client::new();
-        let event = json!({"session_id":"session","hook_event_name":"Stop","last_assistant_message":"Bonjour 🌍"});
-        assert!(client.post(url).json(&event).send().await.is_err());
-        assert!(state.data.lock().unwrap().sessions.is_empty());
-        let response = client
-            .post(url)
-            .header("Authorization", key)
-            .json(&event)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200);
-        assert_eq!(response.json::<Value>().await.unwrap(), json!({}));
-        assert_eq!(
-            state
-                .data
-                .lock()
-                .unwrap()
-                .snapshot(Some("claude-code:session"))
-                .messages[0]
-                .text,
-            "Bonjour 🌍"
-        );
-        assert!(
-            client
-                .post(url)
-                .header("Authorization", key)
-                .body("x".repeat(MAX_BODY + 1))
-                .send()
-                .await
-                .is_err()
-        );
-        assert_eq!(state.data.lock().unwrap().sessions.len(), 1);
+        assert_eq!(hook["type"], "command");
+        assert_eq!(hook["command"], launcher.to_str().unwrap());
+        assert_eq!(hook["args"], json!(["--terminal-event", directory.path()]));
+        assert!(hook.get("url").is_none());
     }
 }
 
@@ -463,9 +392,15 @@ mod tests {
 #[ignore = "requires PARLEY_TEST_CLAUDE_BIN; real CLI with loopback API and temporary hooks only"]
 async fn live_claude_plugin_delivers_new_turn_without_replacing_user_hooks() {
     let binary = std::env::var("PARLEY_TEST_CLAUDE_BIN").unwrap();
-    let ready = tempfile::NamedTempFile::new().unwrap();
-    let state = TerminalState::start(ready.path()).unwrap();
-    let metadata: Value = serde_json::from_slice(&std::fs::read(ready.path()).unwrap()).unwrap();
+    use std::time::Duration;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+    let launcher = std::env::var("PARLEY_TEST_LAUNCHER_BIN").unwrap();
+    let companion = tempfile::tempdir().unwrap();
+    std::fs::write(companion.path().join("companion.json"), "{}").unwrap();
+    plugin(companion.path(), Path::new(&launcher)).unwrap();
     let directory = tempfile::tempdir().unwrap();
     let api = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", api.local_addr().unwrap());
@@ -557,7 +492,7 @@ async fn live_claude_plugin_delivers_new_turn_without_replacing_user_hooks() {
             "false",
             "--plugin-dir",
         ])
-        .arg(metadata["pluginPath"].as_str().unwrap())
+        .arg(companion.path())
         .arg("--settings")
         .arg(settings.to_string())
         .arg("Language fixture")
@@ -573,7 +508,7 @@ async fn live_claude_plugin_delivers_new_turn_without_replacing_user_hooks() {
     );
     assert!(marker.is_file(), "the user's own hook must still run");
     {
-        let data = state.data.lock().unwrap();
+        let data = read_data(companion.path()).unwrap();
         assert!(data.received, "CLI must deliver real hook events");
         assert_eq!(data.sessions.len(), 1);
         let session = &data.sessions[0];

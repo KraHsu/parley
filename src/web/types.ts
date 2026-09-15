@@ -36,6 +36,8 @@ export interface Conversation {
   createdAt: number
 }
 export interface Word {
+  learning?: import('../shared/learning-exchange').LearningOrigin
+  updatedAt?: number
   id: string
   text: string
   language: string

@@ -76,7 +76,7 @@ function policyChanged() {
   <details class="word-exchange">
     <summary>导入与导出</summary>
     <p class="settings-help">
-      JSON 可恢复词句、原句、标签和复习记录；CSV
+      JSON 可在桌面与 Web 之间迁移词句、原句、标签和复习记录；CSV
       适合表格查看，不用于完整恢复。编辑草稿不包含在导出中。
     </p>
     <label class="word-checkbox"

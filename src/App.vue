@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, toRef, watch } from 'vue'
+import CompanionSessions from './features/terminal/CompanionSessions.vue'
 import ConnectionSettings from './features/backends/BackendSettings.vue'
 import ConversationPanel from './features/conversation/ConversationPanel.vue'
 import TutorPanel from './features/tutor/TutorPanel.vue'
@@ -264,6 +265,7 @@ async function checkRuntime() {
           <p class="settings-help">语言设置、模型选择和草稿会自动保存在本机。</p>
         </section>
         <ConnectionSettings />
+        <CompanionSessions />
         <section class="settings-section">
           <h3>本地数据</h3>
           <p class="settings-help" role="status">

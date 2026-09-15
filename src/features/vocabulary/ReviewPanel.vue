@@ -197,7 +197,14 @@ async function practice() {
           <button :disabled="busy" @click="grade('forgot')">忘记<small>10 分钟后</small></button
           ><button :disabled="busy" @click="grade('hard')">吃力<small>1 天后</small></button
           ><button :disabled="busy" @click="grade('remembered')">
-            记住<small>{{ [1, 3, 7, 14, 30][Math.min(current.card.stage, 4)] }} 天后</small>
+            记住<small
+              >{{
+                [1, 3, 7, 14, 30, 60][
+                  Math.min(current.card.stage, current.card.scheduleVersion === 1 ? 4 : 5)
+                ]
+              }}
+              天后</small
+            >
           </button>
         </div>
         <button
