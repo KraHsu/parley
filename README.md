@@ -1,98 +1,69 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/readme-hero-dark.svg" />
   <source media="(prefers-color-scheme: light)" srcset="docs/media/readme-hero-light.svg" />
-  <img src="docs/media/readme-hero-light.svg" alt="Parley：从一段对话，到一个值得留下的表达。" width="100%" />
+  <img src="docs/media/readme-hero-light.svg" alt="Parley" width="100%" />
 </picture>
 
 <div align="center">
 
 # 边聊，边懂，边记住。
 
-用目标语言对话，随时理解词句，把想学的表达留给下一次复习。
+[在线使用](https://krahsu.github.io/parley/) · [桌面安装](docs/INSTALL.md) · [开发文档](docs/DEVELOPMENT.md)
 
-**[打开 Web ↗](https://krahsu.github.io/parley/)** · [桌面安装](docs/INSTALL.md)
-
-[![MIT License](https://img.shields.io/badge/license-MIT-7664b2?style=flat-square)](LICENSE) [![Build checks](https://github.com/KraHsu/parley/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/KraHsu/parley/actions/workflows/ci.yml) [![Web](https://img.shields.io/badge/try-Parley_Web-7664b2?style=flat-square)](https://krahsu.github.io/parley/)
-
-软件免费开源。Web 使用你自己的 API，模型请求使用所选服务的凭据和额度。
+[![MIT License](https://img.shields.io/badge/license-MIT-7664b2?style=flat-square)](LICENSE) [![Build checks](https://github.com/KraHsu/parley/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/KraHsu/parley/actions/workflows/ci.yml)
 
 </div>
 
-## 从“这是什么意思”，到“下次我也想用”
+Parley 是一个用 AI 练外语的聊天工具。
 
-主聊负责交流，语言助手负责理解与表达，词句本把今天遇到的内容留给下一次练习。
+一边用目标语言聊天，一边在旁边问词义、语法，或者问“这句话怎么说”。选中聊天里的词句后，助手会带着这段内容回答，不用再复制一遍。想记的表达可以连同原句存进词句本，加上释义、注释和标签，之后再复习。
 
-| 交流时                                           | 遇到不懂的地方                                         | 想留下一个表达                           | 下一次练习                                 |
-| ------------------------------------------------ | ------------------------------------------------------ | ---------------------------------------- | ------------------------------------------ |
-| 用目标语言聊自己的生活，主聊与答疑各有一个面板。 | 在“怎么说 / 解释 / 翻译”之间切换，带着选中的内容提问。 | 保存词句、原句、自己的释义、注释和标签。 | 从词句本进入复习，先回忆，再看答案和自评。 |
+也可以继续用自己的 Codex 或 Claude Code 终端，让 Parley 的小窗口在旁边答疑。
 
-## 选择你习惯的方式
+## 使用
 
-|              | Web                                            | 桌面工作台                        | 终端伴随                                     |
-| ------------ | ---------------------------------------------- | --------------------------------- | -------------------------------------------- |
-| **怎么开始** | [打开浏览器](https://krahsu.github.io/parley/) | [安装说明](docs/INSTALL.md)       | `parley-cli`                                 |
-| **模型连接** | 仅 API                                         | API、本机 Codex、Claude Code GUI¹ | 用户自己的 Codex / Claude Code，助手独立配置 |
-| **学习数据** | 当前浏览器 IndexedDB                           | 本机 SQLite                       | 本机学习记录；原生历史由 CLI 管理            |
-| **适合**     | 在浏览器里试着练几句                           | 长期积累对话与词句                | 使用原生终端时随手理解语言                   |
+| 方式            | 模型连接                               | 入口                                         |
+| --------------- | -------------------------------------- | -------------------------------------------- |
+| Web             | 自己的 API                             | [在线使用](https://krahsu.github.io/parley/) |
+| 桌面            | API、本机 Codex、Claude Code           | [安装说明](docs/INSTALL.md)                  |
+| 终端 + 语法窗口 | 原生 Codex / Claude Code，助手另行配置 | [终端指南](docs/TERMINAL_COMPANION.md)       |
 
-¹ Claude Code GUI 后端需要独立 API Key。原生 CLI 的登录与 GUI 助手连接是不同入口。Web 和桌面的备份格式目前不直接互通。
+Web 版在设置里添加 API 服务，再给主聊和语言助手选好模型、设置母语和目标语言，就可以开始聊天。两个面板可以用不同的模型。API Key 只保留在当前标签页内存，刷新后需要重新填写；服务也需要允许浏览器跨域访问（CORS）。具体步骤见 [Web 使用说明](docs/WEB.md)。
 
-### 先从 Web 开始
+桌面端可选择 API 或本机 CLI。Claude Code 在 GUI 中需要独立 API Key，原生终端则使用 CLI 自己的登录。各类 API 和 CLI 的配置见[模型服务设置](docs/BACKENDS.md)。软件免费开源，模型请求使用你自己的账号和额度。
 
-1. 打开 [Parley Web](https://krahsu.github.io/parley/)，在设置中添加自己的 API 服务。
-2. 为主聊和语言助手分别选择服务与模型，填写目标语言和母语。
-3. 聊一句，选中想理解的词句，试着解释并收藏。
-
-Web 密钥仅保留在当前标签页内存，刷新后需重新填写。浏览器直连需要服务允许 CORS。没有密钥也可以手动添加词句、查看本地资料和复习。[查看 Web 使用说明 →](docs/WEB.md)
-
-### 原生终端，旁边多一个语言助手
+安装后，从终端运行：
 
 ```bash
 parley-cli
 ```
 
-保留官方 CLI 的登录、快捷键和历史。GUI 同步已保存的回复，你可以在同步正文中选词、解释、翻译和收藏；有多个会话候选时自行选择。
+终端里的登录、快捷键和历史照常使用。Parley 会把已保存的回复同步到语法窗口，在窗口正文里就能选词提问。恢复旧会话或同时开了多个终端时，需要在下拉框里选一下会话。[详细用法](docs/TERMINAL_COMPANION.md)
 
-[Codex / Claude Code 终端伴随指南 →](docs/TERMINAL_COMPANION.md)
+## 当前进度
 
-## 现在能用到什么
+目前是 **0.4.0-alpha.1** 预览版。Web 已上线；桌面端验证过 Ubuntu 24.04 amd64，Windows 和 macOS 目前只通过了构建检查，还没完成实际安装和运行测试。API 适配已实现，真实厂商测试还没做，范围见[兼容记录](docs/BACKEND_COMPATIBILITY.md)。
 
-Web 已上线；桌面主分支是 **0.4.0-alpha.1** 预览版。Ubuntu 24.04 amd64 安装与学习流程已验证；macOS / Windows 通过构建检查，原生运行与安装包仍待验收。
+Linux 安装前请看[安装说明](docs/INSTALL.md)：旧的 `Parley_0.3.0_amd64.deb` 与 KDE Parley 包名冲突，修复包使用 `parley-desktop` 包名。
 
-提供 OpenAI、Claude、Gemini 原生 API，以及 DeepSeek、千问、Kimi、Z.AI 与自定义兼容服务预设。**提供协议适配不等于所有厂商已实测通过**，当前真实 API 厂商验收暂缓。[查看兼容记录 →](docs/BACKEND_COMPATIBILITY.md)
+聊天记录和词句保存在当前浏览器或本机，模型请求会发给你配置的服务。Web 与桌面的备份暂不互通，也没有跨设备同步。[Web 数据与备份](docs/WEB.md#浏览器与数据边界) · [桌面数据与备份](docs/PERSISTENCE.md)
 
-> **旧版 Linux 用户：**旧的 `Parley_0.3.0_amd64.deb` 与 KDE Parley 包名冲突。修复包使用 `parley-desktop` 包名及 `ParleyDesktop_…` 文件名；安装或升级前请按[安装说明](docs/INSTALL.md)操作。
+## 开发
 
-<details>
-<summary><strong>关于模型、数据与学习方式</strong></summary>
+Vue 3 + TypeScript，桌面端用 Tauri 2 / Rust，数据库用 Diesel / SQLite。
 
-- **软件开源，模型服务独立。** Parley 不提供共享账号、统一余额或免费无限请求。API 使用服务商凭据；本机 CLI 按其自身登录与使用方式运行。
-- **学习记录保存在本地。** Web 使用当前浏览器，桌面使用本机数据库；模型请求会发送到你选择的服务。备份方式见 [Web 指南](docs/WEB.md)和[桌面持久化说明](docs/PERSISTENCE.md)。
-- **先做好文字练习。** 当前提供文字交流、表达提示、解释、翻译与词句复习；尚未实现语音对练、发音评分或跨设备同步。
-- **语言可以自己选。** 目标语言与母语可配置；不同语言和模型的回答质量取决于所选服务，Parley 不承诺学习效果。
-- **收藏与复习有清楚的边界。** 词句保留原句快照；Web 与桌面功能细节和备份格式有所不同。[词句学习指南 →](docs/VOCABULARY.md)
-
-</details>
-
-## 为自己的学习方式动手
-
-**Vue 3 · TypeScript · Tauri 2 · Rust · Diesel / SQLite**
-
-Node.js 24.12+（24.x）。桌面开发还需要 Rust 和 [Tauri 系统依赖](https://v2.tauri.app/start/prerequisites/)。
+需要 Node.js 24.12+（24.x）。桌面开发还需要 Rust 和 [Tauri 系统依赖](https://v2.tauri.app/start/prerequisites/)。
 
 ```bash
 nvm use
 npm ci
-npm run web:dev       # 可连接 API 的 Web 开发环境
-# npm run desktop:dev  # Tauri 桌面开发环境
+npm run web:dev
 ```
 
-`npm run dev` 是桌面界面的浏览器预览；Web 产品入口使用 `npm run web:dev`。全部命令、目录结构和构建步骤见[开发指南](docs/DEVELOPMENT.md)。
+桌面开发用 `npm run desktop:dev`。`npm run dev` 只是桌面界面的浏览器预览，连接 API 的 Web 版用 `npm run web:dev`。其余命令见[开发文档](docs/DEVELOPMENT.md)。
 
-[模型服务](docs/BACKENDS.md) · [词句与复习](docs/VOCABULARY.md) · [架构](docs/ARCHITECTURE.md) · [开发计划](docs/MULTI_BACKEND_PLAN.md) · [宣传计划与视频脚本](docs/marketing/README.md)
+[架构](docs/ARCHITECTURE.md) · [词句与复习](docs/VOCABULARY.md) · [开发计划](docs/MULTI_BACKEND_PLAN.md) · [宣传脚本](docs/marketing/README.md)
 
-欢迎用 [Issues](https://github.com/KraHsu/parley/issues) 分享一个具体的学习场景或可复现的问题，也欢迎提交改进。反馈连接问题时请说明系统、使用入口和错误现象，不要附上 API Key。
+遇到问题可以提 [Issue](https://github.com/KraHsu/parley/issues)，写明系统、操作步骤和报错即可。也欢迎直接提 PR。
 
----
-
-[MIT License](LICENSE) · Parley 是独立开源项目，与同名 KDE Parley 无关，也不是任何模型服务商的官方客户端。
+[MIT](LICENSE)。本项目与 KDE Parley 无关，也不是模型服务商的官方客户端。
