@@ -37,9 +37,17 @@ function Assert-Payload {
         $expected = $payloadHashes[$name]
         Assert ($actual -eq $expected) "Installed payload mismatch: $name"
     }
+    Write-Host 'Installed payload hashes match.'
     $shell = New-Object -ComObject WScript.Shell
+    $shortcutDetails = foreach ($root in @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('CommonPrograms'))) {
+        Get-ChildItem $root -Filter '*Parley*.lnk' -Recurse | ForEach-Object {
+            $link = $shell.CreateShortcut($_.FullName)
+            @{ path = $_.FullName; target = $link.TargetPath; arguments = $link.Arguments }
+        }
+    }
+    $shortcutDetails | ConvertTo-Json -Depth 3 | Tee-Object -FilePath (Join-Path $evidence 'shortcuts.json') | Write-Host
     $main = $shell.CreateShortcut((Join-Path $shortcuts 'Parley.lnk'))
-    Assert ($main.TargetPath -eq (Join-Path $install 'parley.exe')) 'GUI shortcut missing or wrong'
+    Assert ($main.TargetPath -eq (Join-Path $install 'parley.exe')) "GUI shortcut target '$($main.TargetPath)' differs from '$install\parley.exe'"
     $tutor = $shell.CreateShortcut((Join-Path $shortcuts 'Parley Tutor.lnk'))
     Assert ($tutor.TargetPath -eq $main.TargetPath -and $tutor.Arguments -eq '--tutor-only') 'Tutor shortcut wrong'
     $terminal = $shell.CreateShortcut((Join-Path $shortcuts 'Parley Terminal.lnk'))
@@ -117,7 +125,7 @@ try {
         realModelCalls = $false
     } | ConvertTo-Json | Tee-Object -FilePath (Join-Path $evidence 'result.json')
 } catch {
-    $_ | Out-String | Set-Content (Join-Path $evidence 'failure.txt')
+    ($_ | Out-String) + $_.ScriptStackTrace | Set-Content (Join-Path $evidence 'failure.txt')
     throw
 } finally {
     if ($gui -and !$gui.HasExited) { Stop-Process -Id $gui.Id -Force }
