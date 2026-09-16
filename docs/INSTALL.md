@@ -1,6 +1,6 @@
 # 安装 Parley
 
-当前预览版提供 **Ubuntu 24.04 x86_64（amd64）** 的 `.deb` 安装包。Windows、macOS 和其他 Linux 发行版尚未完成原生运行验收，未提供安装包；自动构建结果见[兼容记录](BACKEND_COMPATIBILITY.md)。
+已发布的预览版提供 **Ubuntu 24.04 x86_64（amd64）** 的 `.deb` 安装包。Windows x64 的 `.exe` 构建与下载方式见 [Windows 安装说明](WINDOWS.md)。macOS 和其他 Linux 发行版尚未提供安装包；各平台验证范围见[兼容记录](BACKEND_COMPATIBILITY.md)。
 
 ## 下载和安装
 
