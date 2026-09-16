@@ -477,7 +477,7 @@ async fn launch_profile(
             "无法检查 Codex 版本（{}）：{}\n{}",
             output.status,
             binary.display(),
-            diagnostic_text(&output.stderr)
+            version_diagnostic(&output.stderr)
         ));
     }
     let version = String::from_utf8_lossy(&output.stdout);
@@ -671,7 +671,7 @@ fn configured_binary(input: &str) -> Result<PathBuf, String> {
             binary.display()
         ));
     }
-    Ok(binary)
+    crate::launcher::resolve_codex_binary(&binary)
 }
 
 const DIAGNOSTIC_LIMIT: usize = 8192;
@@ -704,10 +704,10 @@ fn diagnostic_text(bytes: &[u8]) -> String {
                 "cookie",
                 "sk-",
                 "eyj",
-                "@",
             ]
             .iter()
             .any(|s| lower.contains(s))
+                || has_private_at_sign(&lower.replace('\\', "/"))
             {
                 "[已隐藏可能包含账号或凭据的诊断行]".to_owned()
             } else {
@@ -718,6 +718,61 @@ fn diagnostic_text(bytes: &[u8]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn has_private_at_sign(line: &str) -> bool {
+    const PACKAGES: &[&str] = &[
+        "@openai/codex-win32-x64",
+        "@openai/codex-win32-arm64",
+        "@openai/codex-linux-x64",
+        "@openai/codex-linux-arm64",
+        "@openai/codex-darwin-x64",
+        "@openai/codex-darwin-arm64",
+        "@openai/codex",
+    ];
+    let package_character = |c: char| c.is_ascii_alphanumeric() || "._+-".contains(c);
+    line.match_indices('@').any(|(offset, _)| {
+        let begins_package = !line[..offset]
+            .chars()
+            .next_back()
+            .is_some_and(package_character);
+        let package_at_sign = begins_package
+            && PACKAGES.iter().any(|package| {
+                line[offset..].strip_prefix(package).is_some_and(|rest| {
+                    !rest.chars().next().is_some_and(package_character)
+                        || rest.strip_prefix('.').is_some_and(|after| {
+                            after.chars().next().is_none_or(char::is_whitespace)
+                        })
+                })
+            });
+        let version = line[offset + 1..]
+            .split(|c: char| !c.is_ascii_alphanumeric() && !".-+".contains(c))
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches('.');
+        let numeric = version.split(['-', '+']).next().unwrap_or_default();
+        let parts: Vec<_> = numeric.split('.').collect();
+        let known_version = version == "latest"
+            || (parts.len() == 3 && parts.iter().all(|part| part.parse::<u64>().is_ok()));
+        let version_at_sign = known_version
+            && PACKAGES.iter().any(|package| {
+                line[..offset].strip_suffix(package).is_some_and(|before| {
+                    !before.chars().next_back().is_some_and(package_character)
+                })
+            });
+        !package_at_sign && !version_at_sign
+    })
+}
+
+fn version_diagnostic(bytes: &[u8]) -> String {
+    let raw = String::from_utf8_lossy(bytes);
+    let mut text = diagnostic_text(bytes);
+    if raw.contains("Missing optional dependency @openai/codex-win32-") {
+        text.push_str("\n当前 Codex 的 npm 安装缺少 Windows 平台组件。请使用安装它的同一套 Node/npm 重新安装 Codex，并包含 optional dependencies；也可选择已安装的 Windows 原生 codex.exe。");
+    } else if raw.contains("Unsupported platform: win32 (ia32)") {
+        text.push_str("\n当前运行的是 32 位 Node.js。请使用与 Windows 架构匹配的 64 位 Node.js 后重新安装 Codex，或选择 Windows 原生 codex.exe。");
+    }
+    text
 }
 
 async fn initialize(client: &Client) -> Reply {
@@ -1237,6 +1292,33 @@ mod tests {
         assert!(!text.contains("credential"));
         assert!(!text.contains("user@example.com"));
         assert!(text.contains("Error: configuration failed"));
+    }
+
+    #[test]
+    fn npm_installation_errors_remain_visible_without_exposing_credentials() {
+        let error = "Error: Missing optional dependency @openai/codex-win32-x64. Reinstall Codex: npm install -g @openai/codex@latest";
+        let text = version_diagnostic(error.as_bytes());
+        assert!(text.contains(error));
+        assert!(text.contains("Windows 平台组件"));
+        for public in [
+            "npm install @openai/codex@0.154.0",
+            r"D:\node\node_modules\@openai\codex\bin\codex.js:100",
+        ] {
+            assert_eq!(diagnostic_text(public.as_bytes()), public);
+        }
+        for private in [
+            "account=user@example.com",
+            "@openai/codex Authorization: Bearer private-value",
+            "user@openai/codex",
+            "account=@openai/codex.example.com",
+            "mail@latest",
+        ] {
+            assert!(!diagnostic_text(private.as_bytes()).contains(private));
+        }
+        assert!(
+            version_diagnostic(b"Error: Unsupported platform: win32 (ia32)")
+                .contains("32 位 Node.js")
+        );
     }
 
     pub(super) fn test_binary() -> PathBuf {

@@ -9,6 +9,40 @@ use std::{
     process::{Command, Stdio},
 };
 
+/// npm installs a Unix shell entrypoint alongside codex.cmd on Windows.
+/// Resolve only that mistaken selection; keep custom .cmd launchers intact.
+pub(crate) fn resolve_codex_binary(binary: &Path) -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    {
+        use std::io::Read;
+        if binary.extension().is_none() && binary.is_file() {
+            let mut header = [0; 2];
+            let shell_script = std::fs::File::open(binary)
+                .and_then(|mut file| file.read_exact(&mut header))
+                .is_ok()
+                && header == *b"#!";
+            if shell_script {
+                let cmd = binary.with_extension("cmd");
+                if cmd.is_file() {
+                    return Ok(cmd);
+                }
+                return Err("所选 Codex 是 Unix shell 脚本，Windows 无法直接运行。请选择同目录的 codex.cmd，或 Windows 原生 codex.exe。".into());
+            }
+        }
+        if binary
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("ps1"))
+        {
+            return Err(
+                "请选择 codex.cmd 或 Windows 原生 codex.exe；此处不直接执行 PowerShell 脚本。"
+                    .into(),
+            );
+        }
+    }
+    Ok(binary.to_owned())
+}
+
 pub(crate) fn codex_command(binary: &Path) -> Command {
     let mut command = Command::new(binary);
     // Desktop launchers don't load shell startup files. Keep an npm-installed
@@ -358,6 +392,11 @@ fn run(options: CliOptions) -> Result<i32, String> {
             .map(Ok)
             .unwrap_or_else(|| saved_claude(&data_file()?)),
     }?;
+    let binary = if backend == TerminalBackend::Codex {
+        resolve_codex_binary(&binary)?
+    } else {
+        binary
+    };
     validate_binary(&binary)?;
     let current = std::env::current_exe().map_err(|e| e.to_string())?;
     if binary.canonicalize().ok() == current.canonicalize().ok() {
@@ -527,6 +566,33 @@ pub fn run_cli() -> i32 {
 mod tests {
     use super::*;
     use diesel::connection::SimpleConnection;
+    #[test]
+    #[cfg(windows)]
+    fn windows_resolves_npm_shell_entry_to_cmd_and_preserves_explicit_launchers() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("Node tools 中文");
+        std::fs::create_dir(&dir).unwrap();
+        let unix = dir.join("codex");
+        let cmd = dir.join("codex.cmd");
+        std::fs::write(&unix, "#!/bin/sh\nexit 1\n").unwrap();
+        assert!(
+            resolve_codex_binary(&unix)
+                .unwrap_err()
+                .contains("Unix shell")
+        );
+        std::fs::write(&cmd, "@echo off\r\necho codex-cli fixture\r\n").unwrap();
+        assert_eq!(resolve_codex_binary(&unix).unwrap(), cmd);
+        assert_eq!(resolve_codex_binary(&cmd).unwrap(), cmd);
+        let output = codex_command(&resolve_codex_binary(&unix).unwrap())
+            .arg("--version")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("codex-cli fixture"));
+        std::fs::write(&unix, b"MZnative-placeholder").unwrap();
+        assert_eq!(resolve_codex_binary(&unix).unwrap(), unix);
+        assert!(resolve_codex_binary(&dir.join("codex.ps1")).is_err());
+    }
     #[test]
     #[cfg(unix)]
     fn selected_shim_finds_its_sibling_runtime_without_shell_startup() {

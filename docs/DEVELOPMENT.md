@@ -60,6 +60,8 @@ npm run tauri -- icon public/app-icon.svg
 
 `.github/workflows/ci.yml` 配置 Linux、Windows 和 macOS 的依赖安装、格式/类型/Clippy 检查和桌面调试构建。CI 不需要 Codex 登录，不调用模型，也不自动发布产物。
 
+`.github/workflows/windows.yml` 另在 Windows runner 上生成 NSIS 安装包并执行安装、窗口启动、覆盖安装和卸载检查，成功后上传可下载的 artifact。发布工作流同时收集 Linux 与 Windows 包到 draft release；构建命令和验证范围见 [Windows 安装说明](WINDOWS.md)。
+
 本地仓库初始化不会自动创建 GitHub 远程仓库。配置远程并推送后，才会运行对应托管平台上的工作流。
 
 ## 首个后续任务

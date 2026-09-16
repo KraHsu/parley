@@ -1,0 +1,56 @@
+name: Windows installer
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Version tag to package
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-installer
+          cache-on-failure: true
+      - run: npm ci
+      - run: npm run package:windows
+      - name: Verify installed application and uninstall
+        shell: pwsh
+        run: ./scripts/test-windows-install.ps1
+      - name: Upload installer and checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: parley-windows-x64
+          path: |
+            target/release/bundle/nsis/*-setup.exe
+            target/release/bundle/nsis/SHA256SUMS-windows-x64
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload installation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-install-validation
+          path: artifacts/windows-install/
+          if-no-files-found: ignore
+          retention-days: 14

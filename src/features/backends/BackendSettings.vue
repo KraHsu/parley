@@ -332,7 +332,9 @@ function modelChoices(pane: 'main' | 'tutor') {
             required
             :disabled="busy"
             :placeholder="
-              config.kind === 'codex' ? '本机 codex 的完整路径' : '本机 claude 的完整路径'
+              config.kind === 'codex'
+                ? 'Codex 完整路径；Windows 使用 codex.cmd 或 codex.exe'
+                : '本机 claude 的完整路径'
             "
             spellcheck="false"
           />

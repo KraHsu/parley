@@ -1,4 +1,4 @@
-name: Linux release package
+name: Desktop release packages
 on:
   workflow_dispatch:
     inputs:
@@ -9,10 +9,12 @@ on:
 permissions:
   contents: read
 jobs:
-  package:
+  windows:
+    uses: ./.github/workflows/windows.yml
+    with:
+      ref: ${{ inputs.tag }}
+  linux:
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -44,10 +46,39 @@ jobs:
           gh release download v0.3.0 --pattern 'Parley_0.3.0_amd64.deb' --pattern SHA256SUMS --dir artifacts/legacy
           (cd artifacts/legacy && sha256sum -c SHA256SUMS)
           bash scripts/test-deb-install.sh target/release/bundle/deb/ParleyDesktop_*.deb artifacts/legacy/Parley_0.3.0_amd64.deb
-      - name: Create a draft release for review
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parley-linux-amd64
+          path: |
+            target/release/bundle/deb/ParleyDesktop_*.deb
+            target/release/bundle/deb/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+  draft:
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: parley-*
+          path: packages
+          merge-multiple: true
+      - name: Create a draft release with both platforms
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "Parley $RELEASE_TAG — Linux preview"
-          gh release upload "$RELEASE_TAG" target/release/bundle/deb/ParleyDesktop_*.deb target/release/bundle/deb/SHA256SUMS
+          cd packages
+          sha256sum -c SHA256SUMS
+          sha256sum -c SHA256SUMS-windows-x64
+          if gh release view "$RELEASE_TAG" --json isDraft > release.json; then
+            jq -e '.isDraft == true' release.json
+          else
+            flags=()
+            if [[ "$RELEASE_TAG" == *-* ]]; then flags+=(--prerelease); fi
+            gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "Parley $RELEASE_TAG" "${flags[@]}"
+          fi
+          gh release upload "$RELEASE_TAG" ParleyDesktop_*.deb *-setup.exe SHA256SUMS SHA256SUMS-windows-x64 --clobber

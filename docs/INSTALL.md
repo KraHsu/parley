@@ -1,6 +1,6 @@
 # 安装 Parley
 
-当前预览版提供 **Ubuntu 24.04 x86_64（amd64）** 的 `.deb` 安装包。Windows、macOS 和其他 Linux 发行版尚未完成原生运行验收，未提供安装包；自动构建结果见[兼容记录](BACKEND_COMPATIBILITY.md)。
+已发布的预览版提供 **Ubuntu 24.04 x86_64（amd64）** 的 `.deb` 安装包。Windows x64 的 `.exe` 构建与下载方式见 [Windows 安装说明](WINDOWS.md)。macOS 和其他 Linux 发行版尚未提供安装包；各平台验证范围见[兼容记录](BACKEND_COMPATIBILITY.md)。
 
 ## 下载和安装
 
@@ -64,7 +64,7 @@ sudo apt remove parley-desktop
 
 ## 从源码构建安装包
 
-当前主分支版本为 `0.4.0-alpha.2`，提供多后端预览功能，使用方式见[模型服务设置](BACKENDS.md)。它会将旧工作区升级到 schema 7；运行前备份已有数据，旧版不能直接打开升级后的数据库。需要复现已发布的 v0.3.0 时，请使用对应 release tag，而不是当前主分支。
+当前源码版本为 `0.4.0-alpha.3`，提供多后端预览功能，使用方式见[模型服务设置](BACKENDS.md)。它会将旧工作区升级到 schema 9；运行前备份已有数据，旧版不能直接打开升级后的数据库。需要复现已发布的版本时，请使用对应 release tag，而不是当前主分支。
 
 在配置好开发环境后执行：
 
