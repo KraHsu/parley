@@ -43,15 +43,17 @@
 
 ## 平台检查范围
 
-| 平台               | 已取得的证据                                                                                                | 尚未证明                                                     |
-| ------------------ | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| Ubuntu 24.04 amd64 | CI 格式、类型、Clippy、测试、Tauri 构建；APT 安装后的 API 学习闭环；GNOME Keyring；X11/Xvfb + IBus 拼音输入 | Wayland、其他输入法、其他 CLI/API 组合及真实 API 厂商        |
-| macOS              | 修复路径夹具后的 CI 检查、测试和 Tauri 调试构建通过                                                         | 原生窗口操作、Keychain、CLI 进程与终端行为；安装包           |
-| Windows            | 修复路径夹具后的 CI 检查、测试和 Tauri 调试构建通过                                                         | 原生窗口操作、Credential Manager、CLI 进程与终端行为；安装包 |
+| 平台               | 已取得的证据                                                                                                          | 尚未证明                                                           |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Ubuntu 24.04 amd64 | CI 格式、类型、Clippy、测试、Tauri 构建；APT 安装后的 API 学习闭环；GNOME Keyring；X11/Xvfb + IBus 拼音输入           | Wayland、其他输入法、其他 CLI/API 组合及真实 API 厂商              |
+| macOS              | 修复路径夹具后的 CI 检查、测试和 Tauri 调试构建通过                                                                   | 原生窗口操作、Keychain、CLI 进程与终端行为；安装包                 |
+| Windows x64        | 三平台 CI；NSIS 安装、中文路径、GUI/CLI 哈希、快捷方式启动、CLI 转发与相邻 GUI 启动、同版本覆盖安装和卸载后的数据保留 | 完整窗口交互、输入法、Credential Manager、真实模型 CLI；跨版本升级 |
 
 [首次多后端 CI](https://github.com/KraHsu/parley/actions/runs/34859678767) 的提交为 `a24ab8c`，Windows 因测试路径夹具失败，不能把整次运行标为成功。修复提交 `731a8c9` 的[三平台 CI](https://github.com/KraHsu/parley/actions/runs/34860914892) 全部通过。包含 Claude 同步 ACL 修复的 `1a5525b` 也已通过[三平台 CI](https://github.com/KraHsu/parley/actions/runs/34863338351)。后续修改的状态见验证分支 [Workspace checks](https://github.com/KraHsu/parley/actions/workflows/ci.yml)。构建通过不等于原生运行验收完成。
 
 2026-09-15 的续聊、窗口重连与跨端词句迁移验证见[专项记录](CONTINUITY_AND_TRANSFER.md)。这里的历史三平台 CI 和已发布包记录不代表未发布源码已完成三平台原生验收。
+
+2026-09-16，提交 `54be637` 的 [Windows installer](https://github.com/KraHsu/parley/actions/runs/35092376836) 在 Windows Server 2022 x64 runner 上通过实际 NSIS 安装测试。下载方式和具体范围见 [Windows 安装说明](WINDOWS.md)。这项检查使用系统自带程序替代模型 CLI，不代表 Windows 10/11 的完整交互和真实模型连接已验收。
 
 ## alpha.3 安装包与本地运行补充
 

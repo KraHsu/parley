@@ -39,10 +39,14 @@ PR、推送到 main 或手动运行 `Windows installer` 都会构建并验证安
 
 - 带空格、中文的安装目录，以及安装后 GUI / CLI 的 SHA256。
 - 开始菜单快捷方式及终端参数引用。
-- CLI 参数和退出码传递；CLI 自动找到相邻 GUI 并打开原生窗口。
+- CLI 参数和退出码传递；CLI 自动找到相邻 GUI 并打开原生窗口；Windows 直接打开 Tutor 快捷方式。
 - 同版本覆盖安装，以及默认卸载后 SQLite 和哨兵文件保留。
 
 结果保存在运行的 `windows-install-validation` artifact。测试使用 Windows 自带程序代替模型 CLI，不调用真实模型服务。
+
+2026-09-16，提交 `54be637` 的[完整运行](https://github.com/KraHsu/parley/actions/runs/35092376836)全部通过，生成 `Parley_0.4.0-alpha.3_x64-setup.exe`。同一提交的三平台基础 CI 和 Web 检查也通过。运行环境为 Windows Server 2022 x64，不等于已完成 Windows 10/11 的人工验收。
+
+文件校验计入 Tauri 打包时对主程序 NSIS 类型标记的修改，其余字节仍完整比对。快捷方式通过 Unicode Shell 接口读取，避免旧脚本接口把中文转换成问号。
 
 这项检查不覆盖真实 Codex / Claude Code 交互、中文输入法、Windows Credential Manager 或模型服务。第一版 Windows 安装包尚无已发布的 Windows 旧包可用于跨版本升级测试，同版本覆盖安装不能证明数据库跨版本迁移。
 
