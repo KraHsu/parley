@@ -39,4 +39,16 @@ jobs:
       - run: npm run check
       - run: npm run test
       - run: cargo test --workspace --locked
+      - name: Verify Windows npm Codex startup without model calls
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $prefix = Join-Path $env:RUNNER_TEMP 'parley codex 中文'
+          npm install --global --prefix "$prefix" --include=optional --no-audit --no-fund @openai/codex@0.154.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:CODEX_HOME = Join-Path $env:RUNNER_TEMP 'parley-codex-test-home'
+          New-Item -ItemType Directory -Force $env:CODEX_HOME | Out-Null
+          $env:PARLEY_TEST_CODEX_BIN = Join-Path $prefix 'codex'
+          cargo test --lib live_codex_connection --locked -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - run: npm run desktop:check -- -- --locked

@@ -18,6 +18,10 @@ GUI 和 `parley-cli.exe` 安装在同一个目录。默认位置为 `%LOCALAPPDA
 
 先在 Parley 设置中选择自己安装的 CLI，或通过 `--codex` / `--claude` 指定绝对路径。安装包不附带模型 CLI 或账户。CLI 的安装和登录仍由用户自行管理。
 
+通过 npm 安装 Codex 时，Windows 应选择 `codex.cmd`；原生安装则选择 `codex.exe`。npm 同时生成的无扩展名 `codex` 是 Unix shell 脚本。当前源码会识别这种误选并使用同目录的 `.cmd`；已下载的旧包可能报 `%1 不是有效的 Win32 应用程序`，请手动改选 `.cmd`。
+
+如果 `.cmd` 也报错，先在 PowerShell 中用 `& 'Codex 的完整路径\codex.cmd' --version` 检查。`Missing optional dependency @openai/codex-win32-…` 表示 npm 安装缺少对应的 Windows 平台组件，需要在同一套 Node/npm 环境重新安装并包含 optional dependencies；`Unsupported platform: win32 (ia32)` 则表示运行的是 32 位 Node。Parley 不会自动修改用户的 Node 或 Codex 安装。
+
 关闭 Parley 后运行新安装器即可覆盖安装。学习数据位于 `%LOCALAPPDATA%\org.parley.desktop`；默认卸载保留数据，只有明确勾选卸载器的清除数据选项才会删除。升级数据库前仍应备份工作区。
 
 ## 构建与发布
@@ -49,5 +53,7 @@ PR、推送到 main 或手动运行 `Windows installer` 都会构建并验证安
 文件校验计入 Tauri 打包时对主程序 NSIS 类型标记的修改，其余字节仍完整比对。快捷方式通过 Unicode Shell 接口读取，避免旧脚本接口把中文转换成问号。
 
 这项检查不覆盖真实 Codex / Claude Code 交互、中文输入法、Windows Credential Manager 或模型服务。第一版 Windows 安装包尚无已发布的 Windows 旧包可用于跨版本升级测试，同版本覆盖安装不能证明数据库跨版本迁移。
+
+基础 CI 另使用 npm 安装的 Codex `0.154.0` 检查 Windows `.cmd` 启动及 app-server 初始化，使用独立空白配置目录，不登录、不调用模型。这里的版本是回归测试样本，不限制用户选择的 CLI 版本。
 
 安装器配置参考 [Tauri Windows Installer](https://v2.tauri.app/distribute/windows-installer/)。

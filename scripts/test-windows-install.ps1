@@ -74,6 +74,13 @@ try {
     $cli = Join-Path $install 'parley-cli.exe'
     $help = & $cli --help
     Assert ($LASTEXITCODE -eq 0 -and ($help -join "`n").Contains('--reconnect')) 'Installed CLI help failed'
+    $shimDirectory = Join-Path $evidence 'npm shim 中文'
+    New-Item -ItemType Directory -Force $shimDirectory | Out-Null
+    $unixShim = Join-Path $shimDirectory 'codex'
+    Set-Content $unixShim "#!/bin/sh`nexit 1"
+    Set-Content (Join-Path $shimDirectory 'codex.cmd') "@echo off`r`necho codex-cli fixture"
+    $shimVersion = & $cli --no-gui --codex $unixShim -- --version
+    Assert ($LASTEXITCODE -eq 0 -and ($shimVersion -join "`n").Contains('codex-cli fixture')) 'Installed launcher did not resolve the Windows npm shim'
     & $cli --no-gui --codex "$env:SystemRoot\System32\cmd.exe" -- /d /c exit 23
     Assert ($LASTEXITCODE -eq 23) 'Native argument forwarding / exit status failed'
 
@@ -128,6 +135,7 @@ try {
         payloadHashes = $true
         shortcuts = $true
         nativeExitStatus = $true
+        npmShimSelection = $true
         siblingGuiWindow = $true
         shortcutGuiWindow = $true
         sameVersionReinstall = $true
