@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFileSync, writeFileSync, statSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 assert.equal(process.platform, 'win32', 'Windows packaging requires a Windows host')
@@ -31,4 +31,21 @@ const sha = createHash('sha256')
   .update(readFileSync(join(directory, name)))
   .digest('hex')
 writeFileSync(join(directory, 'SHA256SUMS-windows-x64'), `${sha}  ${name}\n`)
+// Tauri patches the main executable's bundle marker for NSIS, then restores the
+// build-directory executable. Compare the installed bytes against exactly that
+// bundler transformation, not against the restored raw executable.
+// https://github.com/tauri-apps/tauri/blob/dev/crates/tauri-bundler/src/bundle.rs
+const payload = {}
+for (const binary of ['parley.exe', 'parley-cli.exe']) {
+  const bytes = readFileSync(join(release, binary))
+  if (binary === 'parley.exe') {
+    const marker = Buffer.from('__TAURI_BUNDLE_TYPE_VAR_UNK')
+    const offset = bytes.indexOf(marker)
+    assert(offset >= 0, 'Tauri bundle marker missing; recheck the bundler transformation')
+    Buffer.from('__TAURI_BUNDLE_TYPE_VAR_NSS').copy(bytes, offset)
+  }
+  payload[binary] = createHash('sha256').update(bytes).digest('hex')
+}
+mkdirSync('artifacts/windows-install', { recursive: true })
+writeFileSync('artifacts/windows-install/payload-hashes.json', JSON.stringify(payload, null, 2))
 console.log(`Windows x64 package ready: ${join(directory, name)}\nSHA256: ${sha}`)

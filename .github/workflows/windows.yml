@@ -31,6 +31,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: windows-installer
+          cache-on-failure: true
       - run: npm ci
       - run: npm run package:windows
       - name: Verify installed application and uninstall

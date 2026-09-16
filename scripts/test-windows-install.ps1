@@ -15,6 +15,7 @@ $data = Join-Path $env:LOCALAPPDATA 'org.parley.desktop'
 $shortcuts = Join-Path ([Environment]::GetFolderPath('Programs')) 'Parley'
 $evidence = Join-Path $PWD 'artifacts/windows-install'
 New-Item -ItemType Directory -Force $evidence | Out-Null
+$payloadHashes = Get-Content (Join-Path $evidence 'payload-hashes.json') -Raw | ConvertFrom-Json -AsHashtable
 if ((Test-Path $install) -or (Test-Path $data) -or (Test-Path $shortcuts)) {
     throw 'Refusing to touch an existing Parley installation or workspace.'
 }
@@ -33,7 +34,7 @@ function Run-Installer([string]$File, [string]$Arguments) {
 function Assert-Payload {
     foreach ($name in @('parley.exe', 'parley-cli.exe')) {
         $actual = (Get-FileHash (Join-Path $install $name) -Algorithm SHA256).Hash
-        $expected = (Get-FileHash (Join-Path $release $name) -Algorithm SHA256).Hash
+        $expected = $payloadHashes[$name]
         Assert ($actual -eq $expected) "Installed payload mismatch: $name"
     }
     $shell = New-Object -ComObject WScript.Shell
@@ -69,6 +70,14 @@ try {
         Start-Sleep -Milliseconds 500
     } while ((Get-Date) -lt $deadline)
     Assert ($null -ne $gui -and $gui.MainWindowHandle -ne 0) 'Installed companion GUI did not open a native window'
+    # Native window creation precedes the frontend's first storage_load IPC.
+    $database = Join-Path $data 'parley.sqlite3'
+    $deadline = (Get-Date).AddSeconds(30)
+    do {
+        if ((Test-Path $database) -and (Get-Item $database).Length -gt 0) { break }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    Assert ((Test-Path $database) -and (Get-Item $database).Length -gt 0) 'GUI did not initialize the workspace'
     $gui.CloseMainWindow() | Out-Null
     Assert ($gui.WaitForExit(15000)) 'GUI did not close normally'
     $gui = $null
