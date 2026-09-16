@@ -4,6 +4,7 @@ Set-StrictMode -Version Latest
 if (!$IsWindows -or $env:GITHUB_ACTIONS -ne 'true') {
     throw 'Run this installation test on a disposable GitHub Actions Windows runner.'
 }
+Add-Type -Path (Join-Path $PSScriptRoot '../tests/native/windows_shortcut.cs')
 
 $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
 $metadata = cargo metadata --no-deps --format-version 1 --locked | ConvertFrom-Json
@@ -38,21 +39,32 @@ function Assert-Payload {
         Assert ($actual -eq $expected) "Installed payload mismatch: $name"
     }
     Write-Host 'Installed payload hashes match.'
-    $shell = New-Object -ComObject WScript.Shell
     $shortcutDetails = foreach ($root in @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('CommonPrograms'))) {
         Get-ChildItem $root -Filter '*Parley*.lnk' -Recurse | ForEach-Object {
-            $link = $shell.CreateShortcut($_.FullName)
+            $link = [ParleyValidation.Shortcut]::Read($_.FullName)
             @{ path = $_.FullName; target = $link.TargetPath; arguments = $link.Arguments }
         }
     }
     $shortcutDetails | ConvertTo-Json -Depth 3 | Tee-Object -FilePath (Join-Path $evidence 'shortcuts.json') | Write-Host
-    $main = $shell.CreateShortcut((Join-Path $shortcuts 'Parley.lnk'))
+    $main = [ParleyValidation.Shortcut]::Read((Join-Path $shortcuts 'Parley.lnk'))
     Assert ($main.TargetPath -eq (Join-Path $install 'parley.exe')) "GUI shortcut target '$($main.TargetPath)' differs from '$install\parley.exe'"
-    $tutor = $shell.CreateShortcut((Join-Path $shortcuts 'Parley Tutor.lnk'))
+    $tutor = [ParleyValidation.Shortcut]::Read((Join-Path $shortcuts 'Parley Tutor.lnk'))
     Assert ($tutor.TargetPath -eq $main.TargetPath -and $tutor.Arguments -eq '--tutor-only') 'Tutor shortcut wrong'
-    $terminal = $shell.CreateShortcut((Join-Path $shortcuts 'Parley Terminal.lnk'))
+    $terminal = [ParleyValidation.Shortcut]::Read((Join-Path $shortcuts 'Parley Terminal.lnk'))
     Assert ($terminal.TargetPath -eq "$env:SystemRoot\System32\cmd.exe") 'Terminal shortcut target wrong'
     Assert ($terminal.Arguments -eq "/d /k `"`"$install\parley-cli.exe`"`"") 'Terminal shortcut quoting wrong'
+}
+
+function Wait-Gui {
+    $deadline = (Get-Date).AddSeconds(60)
+    do {
+        $process = Get-Process -Name parley -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -eq (Join-Path $install 'parley.exe') } |
+            Select-Object -First 1
+        if ($process -and $process.MainWindowHandle -ne 0) { return $process }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    throw 'Installed GUI did not open a native window'
 }
 
 $gui = $null
@@ -69,15 +81,7 @@ try {
     # Omitting --gui-bin proves the installed CLI finds its adjacent GUI itself.
     & $cli --codex "$env:SystemRoot\System32\where.exe" -- cmd.exe
     Assert ($LASTEXITCODE -eq 0) 'CLI companion launch failed'
-    $deadline = (Get-Date).AddSeconds(60)
-    do {
-        $gui = Get-Process -Name parley -ErrorAction SilentlyContinue |
-            Where-Object { $_.Path -eq (Join-Path $install 'parley.exe') } |
-            Select-Object -First 1
-        if ($gui -and $gui.MainWindowHandle -ne 0) { break }
-        Start-Sleep -Milliseconds 500
-    } while ((Get-Date) -lt $deadline)
-    Assert ($null -ne $gui -and $gui.MainWindowHandle -ne 0) 'Installed companion GUI did not open a native window'
+    $gui = Wait-Gui
     # Native window creation precedes the frontend's first storage_load IPC.
     $database = Join-Path $data 'parley.sqlite3'
     $deadline = (Get-Date).AddSeconds(30)
@@ -88,6 +92,12 @@ try {
     Assert ((Test-Path $database) -and (Get-Item $database).Length -gt 0) 'GUI did not initialize the workspace'
     $gui.CloseMainWindow() | Out-Null
     Assert ($gui.WaitForExit(15000)) 'GUI did not close normally'
+    $gui = $null
+    # Also ask Windows itself to resolve and launch the installed Unicode link.
+    Start-Process -FilePath (Join-Path $shortcuts 'Parley Tutor.lnk')
+    $gui = Wait-Gui
+    $gui.CloseMainWindow() | Out-Null
+    Assert ($gui.WaitForExit(15000)) 'Shortcut-launched GUI did not close normally'
     $gui = $null
     Assert (Test-Path (Join-Path $data 'parley.sqlite3')) 'GUI did not initialize the workspace'
     $databaseHash = (Get-FileHash (Join-Path $data 'parley.sqlite3')).Hash
@@ -119,6 +129,7 @@ try {
         shortcuts = $true
         nativeExitStatus = $true
         siblingGuiWindow = $true
+        shortcutGuiWindow = $true
         sameVersionReinstall = $true
         uninstall = $true
         workspacePreserved = $true
